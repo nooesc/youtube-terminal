@@ -18,3 +18,4 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 anyhow = "1"
 async-trait = "0.1"
+time = "0.3.47"
