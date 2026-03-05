@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod models;
+mod player;
 mod provider;
 
 fn main() {
