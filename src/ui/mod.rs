@@ -1,3 +1,4 @@
+pub mod search_bar;
 pub mod tab_bar;
 
 use crate::app::AppState;
@@ -15,29 +16,10 @@ pub fn render(f: &mut Frame, state: &AppState) {
         ])
         .split(f.area());
 
-    render_search_bar(f, state, chunks[0]);
+    search_bar::render(f, state, chunks[0]);
     tab_bar::render(f, state, chunks[1]);
     render_content(f, state, chunks[2]);
     render_now_playing(f, state, chunks[3]);
-}
-
-fn render_search_bar(f: &mut Frame, state: &AppState, area: Rect) {
-    let text = if state.search.focused {
-        format!("/ {}_", state.search.query)
-    } else {
-        "/ Search...".to_string()
-    };
-
-    let style = if state.search.focused {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let search = Paragraph::new(text)
-        .style(style)
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(search, area);
 }
 
 fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
