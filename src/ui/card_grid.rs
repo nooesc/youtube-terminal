@@ -1,11 +1,12 @@
 use crate::app::AppState;
 use crate::models::FeedItem;
 use crate::thumbnails::ThumbnailCache;
+use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 const CARD_WIDTH: u16 = 26;
-const CARD_HEIGHT: u16 = 10;
+const CARD_HEIGHT: u16 = 11;
 const THUMB_HEIGHT: u16 = 4;
 
 pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
@@ -89,15 +90,17 @@ fn render_card(
     selected: bool,
     thumb_cache: &ThumbnailCache,
 ) {
-    let border_style = if selected {
-        Style::default().fg(Color::Yellow)
+    let selected_green_bg = Color::Rgb(98, 114, 98);
+    let (border_style, bg) = if selected {
+        (Style::default().fg(Color::Green), selected_green_bg)
     } else {
-        Style::default().fg(Color::DarkGray)
+        (Style::default().fg(Color::DarkGray), Color::Reset)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(bg));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -105,9 +108,8 @@ fn render_card(
         return;
     }
 
-    // Thumbnail placeholder (colored based on item ID hash)
-    let (title, channel, meta) = format_card_item(item);
-    let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(3));
+    let (title, channel, views, time_ago) = format_card_item(item);
+    let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(4));
     let thumb_area = Rect::new(inner.x, inner.y, inner.width, thumb_h);
     render_thumbnail(f, item, thumb_area, thumb_cache);
 
@@ -139,8 +141,15 @@ fn render_card(
         );
     }
 
-    // Meta (views + time)
+    // Views + time ago
     if text_y + 2 < inner.y + inner.height {
+        let meta = if time_ago.is_empty() {
+            views
+        } else if views.is_empty() {
+            time_ago
+        } else {
+            format!("{} \u{00b7} {}", views, time_ago)
+        };
         let truncated_meta = truncate_str(&meta, text_width as usize);
         let meta_span = Span::styled(truncated_meta, Style::default().fg(Color::DarkGray));
         f.render_widget(
@@ -193,26 +202,50 @@ fn render_thumb_placeholder(f: &mut Frame, item: &FeedItem, area: Rect) {
     }
 }
 
-fn format_card_item(item: &FeedItem) -> (String, String, String) {
+/// Returns (title, channel, views/meta, time_ago)
+fn format_card_item(item: &FeedItem) -> (String, String, String, String) {
     match item {
         FeedItem::Video(v) | FeedItem::Short(v) => {
             let views = v
                 .view_count
                 .map(|n| format!("{} views", format_count(n)))
                 .unwrap_or_default();
-            (v.title.clone(), v.channel.clone(), views)
+            let time_ago = v.published.map(format_time_ago).unwrap_or_default();
+            (v.title.clone(), v.channel.clone(), views, time_ago)
         }
         FeedItem::Channel(c) => {
             let subs = c.subscriber_count.map(format_count).unwrap_or_default();
-            (c.name.clone(), "Channel".into(), format!("{} subs", subs))
+            (
+                c.name.clone(),
+                "Channel".into(),
+                format!("{} subs", subs),
+                String::new(),
+            )
         }
         FeedItem::Playlist(p) => {
             let count = p
                 .video_count
                 .map(|n| format!("{} videos", n))
                 .unwrap_or_default();
-            (p.title.clone(), p.channel.clone(), count)
+            (p.title.clone(), p.channel.clone(), count, String::new())
         }
+    }
+}
+
+fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let ago = Utc::now().signed_duration_since(dt);
+    if ago.num_minutes() < 1 {
+        "just now".to_string()
+    } else if ago.num_hours() < 1 {
+        format!("{}m ago", ago.num_minutes())
+    } else if ago.num_hours() < 24 {
+        format!("{}h ago", ago.num_hours())
+    } else if ago.num_days() < 30 {
+        format!("{}d ago", ago.num_days())
+    } else if ago.num_days() < 365 {
+        format!("{}mo ago", ago.num_days() / 30)
+    } else {
+        format!("{}y ago", ago.num_days() / 365)
     }
 }
 

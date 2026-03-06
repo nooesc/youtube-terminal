@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
@@ -114,7 +115,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
             } else {
                 Style::default().fg(Color::White)
             };
-            let meta = format_video_meta(v.view_count, v.duration.as_ref());
+            let meta = format_video_meta(v.view_count, v.duration.as_ref(), v.published);
             let line = Line::from(vec![
                 Span::styled(marker, Style::default().fg(Color::Cyan)),
                 Span::styled(&v.title, title_style),
@@ -132,12 +133,16 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Videos"))
-        .highlight_style(Style::default().bg(Color::DarkGray));
+        .highlight_style(Style::default().bg(Color::Rgb(98, 114, 98)));
 
     f.render_stateful_widget(list, chunks[2], &mut list_state);
 }
 
-fn format_video_meta(view_count: Option<u64>, duration: Option<&std::time::Duration>) -> String {
+fn format_video_meta(
+    view_count: Option<u64>,
+    duration: Option<&std::time::Duration>,
+    published: Option<chrono::DateTime<chrono::Utc>>,
+) -> String {
     let views = view_count.map(format_count).unwrap_or_default();
     let dur = duration
         .map(|d| {
@@ -151,11 +156,34 @@ fn format_video_meta(view_count: Option<u64>, duration: Option<&std::time::Durat
             }
         })
         .unwrap_or_default();
-    match (views.is_empty(), dur.is_empty()) {
-        (false, false) => format!("{} \u{00b7} {}", views, dur),
-        (false, true) => views,
-        (true, false) => dur,
-        (true, true) => String::new(),
+    let time_ago = published.map(format_time_ago).unwrap_or_default();
+    let mut parts: Vec<&str> = Vec::new();
+    if !views.is_empty() {
+        parts.push(&views);
+    }
+    if !dur.is_empty() {
+        parts.push(&dur);
+    }
+    if !time_ago.is_empty() {
+        parts.push(&time_ago);
+    }
+    parts.join(" \u{00b7} ")
+}
+
+fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let ago = Utc::now().signed_duration_since(dt);
+    if ago.num_minutes() < 1 {
+        "just now".to_string()
+    } else if ago.num_hours() < 1 {
+        format!("{}m ago", ago.num_minutes())
+    } else if ago.num_hours() < 24 {
+        format!("{}h ago", ago.num_hours())
+    } else if ago.num_days() < 30 {
+        format!("{}d ago", ago.num_days())
+    } else if ago.num_days() < 365 {
+        format!("{}mo ago", ago.num_days() / 30)
+    } else {
+        format!("{}y ago", ago.num_days() / 365)
     }
 }
 

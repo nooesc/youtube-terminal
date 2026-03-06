@@ -48,7 +48,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
                 format!("{subs} subscribers")
             };
             let line = Line::from(vec![
-                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(marker, Style::default().fg(Color::Green)),
                 Span::styled(
                     &channel.name,
                     Style::default()
@@ -71,7 +71,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
                 .borders(Borders::ALL)
                 .title("Subscriptions"),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray));
+        .highlight_style(Style::default().bg(Color::Rgb(98, 114, 98)));
 
     f.render_stateful_widget(list, area, &mut list_state);
 }

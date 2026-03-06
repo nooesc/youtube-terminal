@@ -17,7 +17,7 @@ impl Default for Config {
         let data_dir = base.clone();
         let cache_dir = base.join("cache");
         Self {
-            mpv_geometry: "400x225+0+0".to_string(),
+            mpv_geometry: "800x450+50%+50%".to_string(),
             mpv_ontop: true,
             data_dir,
             cache_dir,

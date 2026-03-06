@@ -49,6 +49,9 @@ async fn main() -> anyhow::Result<()> {
         let _ = std::fs::remove_file(path);
     }
 
+    // Ensure thumbnail cache directory exists
+    let _ = std::fs::create_dir_all(config.thumbnail_dir());
+
     // 3. Init auth state
     let mut auth_state = AuthState::load(&config);
 
