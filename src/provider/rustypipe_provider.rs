@@ -36,7 +36,13 @@ impl RustyPipeProvider {
             .channel_videos(channel_id)
             .await
             .context("channel_videos failed")?;
-        Ok(ch.content.items.iter().take(10).map(map_video_item).collect())
+        Ok(ch
+            .content
+            .items
+            .iter()
+            .take(10)
+            .map(map_video_item)
+            .collect())
     }
 }
 
@@ -248,5 +254,4 @@ impl ContentProvider for RustyPipeProvider {
             videos: playlist.videos.items.iter().map(map_video_item).collect(),
         })
     }
-
 }

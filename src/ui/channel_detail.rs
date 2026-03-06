@@ -21,7 +21,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
         .constraints([
             Constraint::Length(5), // header
             Constraint::Length(3), // subscribe action
-            Constraint::Min(5),   // video list
+            Constraint::Min(5),    // video list
         ])
         .split(area);
 

@@ -59,9 +59,7 @@ impl Database {
     }
 
     pub fn get_subscribed_channel_ids(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT channel_id FROM subscriptions")?;
+        let mut stmt = self.conn.prepare("SELECT channel_id FROM subscriptions")?;
 
         let ids = stmt
             .query_map([], |row| row.get(0))?

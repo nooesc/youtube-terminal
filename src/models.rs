@@ -119,13 +119,4 @@ impl FeedItem {
             FeedItem::Playlist(p) => &p.thumbnail_url,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn title(&self) -> &str {
-        match self {
-            FeedItem::Video(v) | FeedItem::Short(v) => &v.title,
-            FeedItem::Channel(c) => &c.name,
-            FeedItem::Playlist(p) => &p.title,
-        }
-    }
 }

@@ -414,21 +414,19 @@ fn handle_action(
         Action::ThumbnailFailed(_) => {
             state.dispatch(action);
         }
-        Action::Subscribe(ref channel) => {
-            match db.subscribe(channel) {
-                Ok(()) => {
-                    state.command.message = Some(format!("Subscribed to {}", channel.name));
-                    if let Some(ref mut cd) = state.channel_detail {
-                        if cd.detail.item.id == channel.id {
-                            cd.is_subscribed = true;
-                        }
+        Action::Subscribe(ref channel) => match db.subscribe(channel) {
+            Ok(()) => {
+                state.command.message = Some(format!("Subscribed to {}", channel.name));
+                if let Some(ref mut cd) = state.channel_detail {
+                    if cd.detail.item.id == channel.id {
+                        cd.is_subscribed = true;
                     }
                 }
-                Err(e) => {
-                    state.command.message = Some(format!("Subscribe error: {}", e));
-                }
             }
-        }
+            Err(e) => {
+                state.command.message = Some(format!("Subscribe error: {}", e));
+            }
+        },
         Action::Unsubscribe(ref channel_id) => {
             let name = state
                 .channel_detail
@@ -472,8 +470,7 @@ fn handle_action(
                 let is_subbed = db.is_subscribed(&channel.id).unwrap_or(false);
                 if is_subbed {
                     if db.unsubscribe(&channel.id).is_ok() {
-                        state.command.message =
-                            Some(format!("Unsubscribed from {}", channel.name));
+                        state.command.message = Some(format!("Unsubscribed from {}", channel.name));
                     }
                 } else if db.subscribe(&channel).is_ok() {
                     state.command.message = Some(format!("Subscribed to {}", channel.name));
@@ -558,7 +555,10 @@ fn spawn_feed_load(
             all_videos.sort_by(|a, b| b.published.cmp(&a.published));
 
             let page = LoadedPage::Home(models::FeedPage {
-                items: all_videos.into_iter().map(models::FeedItem::Video).collect(),
+                items: all_videos
+                    .into_iter()
+                    .map(models::FeedItem::Video)
+                    .collect(),
                 continuation: None,
             });
             let _ = tx.send(Action::FeedLoaded(req_id, Box::new(page)));
@@ -806,12 +806,7 @@ fn record_history(db: &Database, detail: &models::VideoDetail) {
     );
 }
 
-fn execute_command(
-    cmd: &str,
-    state: &mut AppState,
-    config: &Config,
-    auth_state: &mut AuthState,
-) {
+fn execute_command(cmd: &str, state: &mut AppState, config: &Config, auth_state: &mut AuthState) {
     if cmd == "q" || cmd == "quit" {
         state.should_quit = true;
         return;

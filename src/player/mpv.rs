@@ -311,10 +311,6 @@ impl MpvPlayer {
         self.process = None;
         let _ = std::fs::remove_file(&self.socket_path);
     }
-
-    pub fn is_running(&self) -> bool {
-        self.process.is_some()
-    }
 }
 
 impl Drop for MpvPlayer {

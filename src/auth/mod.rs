@@ -30,9 +30,4 @@ impl AuthState {
             AuthState::Authenticated { cookie_path } => Some(cookie_path),
         }
     }
-
-    #[allow(dead_code)]
-    pub fn is_authenticated(&self) -> bool {
-        matches!(self, AuthState::Authenticated { .. })
-    }
 }
