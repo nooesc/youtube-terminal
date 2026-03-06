@@ -70,6 +70,11 @@ pub enum Action {
     SubmitCommand(String),
     CancelCommand,
 
+    // Subscriptions
+    Subscribe(ChannelItem),
+    Unsubscribe(String), // channel_id
+    SubscribeSelected,
+
     // Errors
     ShowError(String),
 
@@ -122,8 +127,12 @@ pub struct DetailState {
     pub selected_action: usize,
 }
 
+#[allow(dead_code)]
 pub struct ChannelDetailState {
     pub detail: ChannelDetail,
+    pub selected_action: usize,
+    pub selected_video: usize,
+    pub is_subscribed: bool,
 }
 
 pub struct PlaylistDetailState {
@@ -154,6 +163,7 @@ pub struct AppState {
     pub detail: Option<DetailState>,
     pub channel_detail: Option<ChannelDetailState>,
     pub playlist_detail: Option<PlaylistDetailState>,
+    pub subscription_channels: Vec<ChannelItem>,
     pub player_state: MpvPlayerState,
     pub loading: LoadingState,
     pub should_quit: bool,
@@ -192,6 +202,7 @@ impl AppState {
             detail: None,
             channel_detail: None,
             playlist_detail: None,
+            subscription_channels: Vec::new(),
             player_state: MpvPlayerState::Stopped,
             loading: LoadingState {
                 feed_loading: false,
@@ -228,7 +239,7 @@ impl AppState {
                 View::Search => self.navigate_list(dir),
                 View::VideoDetail(_) => self.navigate_detail(dir),
                 View::PlaylistDetail(_) => self.navigate_playlist_detail(dir),
-                View::ChannelDetail(_) => {}
+                View::ChannelDetail(_) => self.navigate_channel_detail(dir),
             },
             Action::Select => {
                 self.handle_select();
@@ -326,8 +337,8 @@ impl AppState {
                                 .collect();
                             self.cards.continuation = feed.continuation;
                         }
-                        LoadedPage::Subscriptions(_) => {
-                            // Channel list display handled separately
+                        LoadedPage::Subscriptions(feed) => {
+                            self.subscription_channels = feed.items;
                         }
                     }
                     self.cards.selected_row = 0;
@@ -395,7 +406,12 @@ impl AppState {
                 if req_id == self.loading.detail_request_id {
                     self.loading.detail_loading = false;
                     let channel_id = detail.item.id.clone();
-                    self.channel_detail = Some(ChannelDetailState { detail });
+                    self.channel_detail = Some(ChannelDetailState {
+                        detail,
+                        selected_action: 0,
+                        selected_video: 0,
+                        is_subscribed: false, // Will be set by caller after dispatch
+                    });
                     self.previous_views.push(self.view.clone());
                     self.view = View::ChannelDetail(channel_id);
                 }
@@ -420,6 +436,9 @@ impl AppState {
             }
             Action::PlayerStateUpdate(state) => {
                 self.player_state = state;
+            }
+            Action::Subscribe(_) | Action::Unsubscribe(_) | Action::SubscribeSelected => {
+                // Handled by the event loop in main.rs, not by dispatch
             }
             Action::ShowError(msg) => {
                 self.command.message = Some(msg);
@@ -523,6 +542,34 @@ impl AppState {
                 Direction::Down => {
                     if detail.selected_action < max_actions - 1 {
                         detail.selected_action += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn navigate_channel_detail(&mut self, dir: Direction) {
+        if let Some(ref mut cd) = self.channel_detail {
+            let num_videos = cd.detail.videos.len();
+            match dir {
+                Direction::Up => {
+                    if cd.selected_action == 1 && cd.selected_video > 0 {
+                        cd.selected_video -= 1;
+                    } else if cd.selected_action == 1 && cd.selected_video == 0 {
+                        cd.selected_action = 0; // go back to subscribe button
+                    }
+                }
+                Direction::Down => {
+                    if cd.selected_action == 0 {
+                        if num_videos > 0 {
+                            cd.selected_action = 1; // enter videos section
+                            cd.selected_video = 0;
+                        }
+                    } else if cd.selected_action == 1
+                        && cd.selected_video < num_videos.saturating_sub(1)
+                    {
+                        cd.selected_video += 1;
                     }
                 }
                 _ => {}
