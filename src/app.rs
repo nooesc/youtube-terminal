@@ -83,13 +83,10 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LoadedPage {
     Home(FeedPage<FeedItem>),
     Subscriptions(FeedPage<ChannelItem>),
-    SubscriptionFeed(FeedPage<VideoItem>),
     History(FeedPage<HistoryEntry>),
-    Trending(FeedPage<VideoItem>),
 }
 
 pub struct TabState {
@@ -325,16 +322,6 @@ impl AppState {
                             self.cards.items = feed.items;
                             self.cards.continuation = feed.continuation;
                         }
-                        LoadedPage::Trending(feed) => {
-                            self.cards.items =
-                                feed.items.into_iter().map(FeedItem::Video).collect();
-                            self.cards.continuation = feed.continuation;
-                        }
-                        LoadedPage::SubscriptionFeed(feed) => {
-                            self.cards.items =
-                                feed.items.into_iter().map(FeedItem::Video).collect();
-                            self.cards.continuation = feed.continuation;
-                        }
                         LoadedPage::History(feed) => {
                             self.cards.items = feed
                                 .items
@@ -363,20 +350,8 @@ impl AppState {
                 if req_id == self.loading.feed_request_id {
                     self.loading.loading_more_feed = false;
                     match *page {
-                        LoadedPage::Trending(feed) => {
-                            self.cards
-                                .items
-                                .extend(feed.items.into_iter().map(FeedItem::Video));
-                            self.cards.continuation = feed.continuation;
-                        }
                         LoadedPage::Home(feed) => {
                             self.cards.items.extend(feed.items);
-                            self.cards.continuation = feed.continuation;
-                        }
-                        LoadedPage::SubscriptionFeed(feed) => {
-                            self.cards
-                                .items
-                                .extend(feed.items.into_iter().map(FeedItem::Video));
                             self.cards.continuation = feed.continuation;
                         }
                         LoadedPage::History(feed) => {
@@ -820,17 +795,8 @@ mod tests {
         // Simulate initial feed
         state.dispatch(Action::FeedLoaded(
             1,
-            Box::new(LoadedPage::Trending(FeedPage {
-                items: vec![VideoItem {
-                    id: "1".into(),
-                    title: "A".into(),
-                    channel: "".into(),
-                    channel_id: "".into(),
-                    view_count: None,
-                    duration: None,
-                    published: None,
-                    thumbnail_url: "".into(),
-                }],
+            Box::new(LoadedPage::Home(FeedPage {
+                items: vec![make_video("1")],
                 continuation: Some("feed_token".into()),
             })),
         ));

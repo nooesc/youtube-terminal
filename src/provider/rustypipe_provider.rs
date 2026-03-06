@@ -28,6 +28,16 @@ impl RustyPipeProvider {
         Ok(Self { client })
     }
 
+    /// Fetch latest videos for a channel (used by For You feed aggregation).
+    pub async fn channel_latest_videos(&self, channel_id: &str) -> Result<Vec<models::VideoItem>> {
+        let ch = self
+            .client
+            .query()
+            .channel_videos(channel_id)
+            .await
+            .context("channel_videos failed")?;
+        Ok(ch.content.items.iter().take(10).map(map_video_item).collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,29 +157,6 @@ impl ContentProvider for RustyPipeProvider {
         }
     }
 
-    async fn trending(&self) -> Result<models::FeedPage<models::VideoItem>> {
-        match self.client.query().trending().await {
-            Ok(items) => Ok(models::FeedPage {
-                items: items.iter().map(map_video_item).collect(),
-                continuation: None,
-            }),
-            Err(_) => {
-                // YouTube's trending endpoint is broken in RustyPipe 0.11.4
-                // (BadRequest). Fall back to recommendations from a popular video.
-                let details = self
-                    .client
-                    .query()
-                    .video_details("dQw4w9WgXcQ")
-                    .await
-                    .context("trending fallback failed")?;
-                Ok(models::FeedPage {
-                    items: details.recommended.items.iter().map(map_video_item).collect(),
-                    continuation: details.recommended.ctoken,
-                })
-            }
-        }
-    }
-
     async fn video_detail(&self, id: &str) -> Result<models::VideoDetail> {
         let details = self
             .client
@@ -262,49 +249,4 @@ impl ContentProvider for RustyPipeProvider {
         })
     }
 
-    async fn home_feed(
-        &self,
-        _continuation: Option<&str>,
-    ) -> Result<models::FeedPage<models::FeedItem>> {
-        // RustyPipe doesn't expose a home/recommended feed API,
-        // so we fall back to trending wrapped as FeedItem::Video.
-        let page = self.trending().await?;
-        Ok(models::FeedPage {
-            items: page
-                .items
-                .into_iter()
-                .map(models::FeedItem::Video)
-                .collect(),
-            continuation: None,
-        })
-    }
-
-    async fn subscription_feed(
-        &self,
-        continuation: Option<&str>,
-    ) -> Result<models::FeedPage<models::VideoItem>> {
-        if let Some(ctoken) = continuation {
-            let page = self
-                .client
-                .query()
-                .continuation::<RpVideoItem, _>(ctoken, ContinuationEndpoint::Browse, None)
-                .await
-                .context("subscription_feed continuation failed")?;
-            Ok(models::FeedPage {
-                items: page.items.iter().map(map_video_item).collect(),
-                continuation: page.ctoken,
-            })
-        } else {
-            let page = self
-                .client
-                .query()
-                .subscription_feed()
-                .await
-                .context("subscription_feed failed")?;
-            Ok(models::FeedPage {
-                items: page.items.iter().map(map_video_item).collect(),
-                continuation: page.ctoken,
-            })
-        }
-    }
 }

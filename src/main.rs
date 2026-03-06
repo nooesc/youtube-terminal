@@ -521,28 +521,49 @@ fn spawn_feed_load(
         return;
     }
 
-    let tx = tx.clone();
-    let provider = Arc::clone(provider);
-    let tab = state.tabs.active;
-
-    tokio::spawn(async move {
-        let result = match tab {
-            Tab::ForYou => match provider.home_feed(None).await {
-                Ok(page) => Some(LoadedPage::Home(page)),
-                Err(e) => {
-                    let _ = tx.send(Action::ShowError(format!("Feed error: {}", e)));
-                    None
-                }
-            },
-            Tab::Subscriptions | Tab::History => {
-                unreachable!("Handled synchronously above")
-            }
-        };
-
-        if let Some(page) = result {
+    // For You tab: aggregate videos from local subscriptions
+    if state.tabs.active == Tab::ForYou {
+        let channel_ids = db.get_subscribed_channel_ids().unwrap_or_default();
+        if channel_ids.is_empty() {
+            let page = LoadedPage::Home(models::FeedPage {
+                items: Vec::new(),
+                continuation: None,
+            });
             let _ = tx.send(Action::FeedLoaded(req_id, Box::new(page)));
+            return;
         }
-    });
+
+        let tx = tx.clone();
+        let provider = Arc::clone(provider);
+        tokio::spawn(async move {
+            let mut handles = Vec::new();
+            for channel_id in channel_ids {
+                let provider = Arc::clone(&provider);
+                handles.push(tokio::spawn(async move {
+                    provider
+                        .channel_latest_videos(&channel_id)
+                        .await
+                        .unwrap_or_default()
+                }));
+            }
+
+            let mut all_videos: Vec<models::VideoItem> = Vec::new();
+            for handle in handles {
+                if let Ok(videos) = handle.await {
+                    all_videos.extend(videos);
+                }
+            }
+
+            // Sort by publish date descending (newest first)
+            all_videos.sort_by(|a, b| b.published.cmp(&a.published));
+
+            let page = LoadedPage::Home(models::FeedPage {
+                items: all_videos.into_iter().map(models::FeedItem::Video).collect(),
+                continuation: None,
+            });
+            let _ = tx.send(Action::FeedLoaded(req_id, Box::new(page)));
+        });
+    }
 }
 
 fn spawn_detail_load(
@@ -637,42 +658,7 @@ fn spawn_playlist_load(
 fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: &ActionSender) {
     match &state.view {
         View::Home => {
-            // Subscriptions and History tabs are loaded locally without pagination
-            if matches!(state.tabs.active, Tab::Subscriptions | Tab::History) {
-                return;
-            }
-            if state.loading.feed_loading || state.loading.loading_more_feed {
-                return;
-            }
-            let total = state.cards.items.len();
-            let idx = state.selected_card_index();
-            let cols = state.cards.columns.max(1);
-            // Trigger when within last 2 rows
-            if total > 0 && idx >= total.saturating_sub(cols * 2) {
-                if let Some(ctoken) = state.cards.continuation.clone() {
-                    state.loading.loading_more_feed = true;
-                    let req_id = state.loading.feed_request_id;
-                    let tx = tx.clone();
-                    let provider = Arc::clone(provider);
-
-                    tokio::spawn(async move {
-                        let result = match provider.home_feed(Some(&ctoken)).await {
-                            Ok(page) => Some(LoadedPage::Home(page)),
-                            Err(e) => {
-                                let _ = tx.send(Action::ShowError(format!(
-                                    "Feed continuation error: {}",
-                                    e
-                                )));
-                                None
-                            }
-                        };
-
-                        if let Some(page) = result {
-                            let _ = tx.send(Action::AppendFeed(req_id, Box::new(page)));
-                        }
-                    });
-                }
-            }
+            // For You, Subscriptions, and History are loaded without pagination
         }
         View::Search => {
             if state.loading.search_loading || state.loading.loading_more_search {
