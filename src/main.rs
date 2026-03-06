@@ -29,7 +29,6 @@ use ratatui::prelude::*;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Handle;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,14 +53,10 @@ async fn main() -> anyhow::Result<()> {
     let mut auth_state = AuthState::load(&config);
 
     // 4. Init provider
+    // Note: cookies are NOT loaded into RustyPipe because its set_cookie_txt
+    // validates by hitting YouTube servers, which fails with rotated sessions.
+    // Cookies are only used for mpv/yt-dlp playback via the cookie file path.
     let provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
-    if let AuthState::Authenticated { cookie_path } = &auth_state {
-        if let Ok(content) = std::fs::read_to_string(cookie_path) {
-            // Try to load cookies into RustyPipe for authenticated API calls.
-            // If this fails (e.g. stale session), cookies still work for mpv/yt-dlp.
-            let _ = provider.set_cookies(&content).await;
-        }
-    }
     let provider = Arc::new(provider);
 
     // 5. Init player
@@ -174,7 +169,7 @@ fn handle_action(
         Action::SubmitCommand(ref cmd) => {
             let cmd = cmd.trim().to_string();
             state.dispatch(action);
-            execute_command(&cmd, state, config, auth_state, provider, tx, db);
+            execute_command(&cmd, state, config, auth_state);
         }
         Action::Select => {
             // Determine what to load based on current view
@@ -720,9 +715,6 @@ fn execute_command(
     state: &mut AppState,
     config: &Config,
     auth_state: &mut AuthState,
-    provider: &Arc<RustyPipeProvider>,
-    tx: &ActionSender,
-    db: &Database,
 ) {
     if cmd == "q" || cmd == "quit" {
         state.should_quit = true;
@@ -746,31 +738,9 @@ fn execute_command(
 
         match auth::cookies::import_cookie_file(source, &dest) {
             Ok(()) => {
-                // Cookies saved to disk — mark as authenticated.
-                // Try loading into RustyPipe for API calls, but don't fail
-                // if it rejects them — cookies still work for mpv/yt-dlp playback.
                 *auth_state = AuthState::Authenticated { cookie_path: dest };
-                if let Ok(content) = std::fs::read_to_string(
-                    auth_state.cookie_path().unwrap(),
-                ) {
-                    let provider_clone = Arc::clone(provider);
-                    let rp_ok = tokio::task::block_in_place(|| {
-                        Handle::current().block_on(async move {
-                            provider_clone.set_cookies(&content).await
-                        })
-                    });
-                    if rp_ok.is_ok() {
-                        state.command.message =
-                            Some("Cookies imported — subscriptions enabled".into());
-                    } else {
-                        state.command.message =
-                            Some("Cookies imported — playback will use your account".into());
-                    }
-                } else {
-                    state.command.message =
-                        Some("Cookies imported successfully".into());
-                }
-                spawn_feed_load(state, provider, tx, db);
+                state.command.message =
+                    Some("Cookies imported — playback will use your account".into());
             }
             Err(e) => {
                 state.command.message = Some(format!("Error: {}", e));

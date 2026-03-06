@@ -28,15 +28,6 @@ impl RustyPipeProvider {
         Ok(Self { client })
     }
 
-    /// Import cookies from Netscape cookie-jar text format.
-    pub async fn set_cookies(&self, cookie_content: &str) -> Result<()> {
-        self.client
-            .user_auth_set_cookie_txt(cookie_content)
-            .await
-            .context("failed to set cookies")?;
-        Ok(())
-    }
-
 }
 
 // ---------------------------------------------------------------------------
