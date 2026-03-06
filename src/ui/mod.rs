@@ -1,5 +1,6 @@
 pub mod search_bar;
 pub mod tab_bar;
+pub mod video_detail;
 pub mod video_list;
 
 use crate::app::AppState;
@@ -41,12 +42,8 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
                 .block(Block::default().borders(Borders::ALL).title("Content"));
             f.render_widget(content, area);
         }
-        crate::app::View::VideoDetail(id) => {
-            // Placeholder for video detail (Task 14)
-            let text = format!("Video detail: {}", id);
-            let content = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Video Detail"));
-            f.render_widget(content, area);
+        crate::app::View::VideoDetail(_) => {
+            video_detail::render(f, state, area);
         }
         crate::app::View::ChannelDetail(id) => {
             let text = format!("Channel: {}", id);
