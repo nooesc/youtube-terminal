@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&config.db_path())?;
 
     // 3. Init auth state
-    let auth_state = AuthState::load(&config);
+    let mut auth_state = AuthState::load(&config);
 
     // 4. Init provider
     let mut provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
@@ -88,13 +88,17 @@ async fn main() -> anyhow::Result<()> {
 
         // Poll crossterm events
         if let Some(action) = poll_event(&state) {
+            // Clear command status message on any key press
+            if !state.command.active && state.command.message.is_some() {
+                state.command.message = None;
+            }
             handle_action(
                 action,
                 &mut state,
                 &mut player,
                 &db,
                 &config,
-                &auth_state,
+                &mut auth_state,
                 &provider,
                 &tx,
                 &mut thumb_cache,
@@ -109,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
                 &mut player,
                 &db,
                 &config,
-                &auth_state,
+                &mut auth_state,
                 &provider,
                 &tx,
                 &mut thumb_cache,
@@ -135,7 +139,7 @@ fn handle_action(
     player: &mut MpvPlayer,
     db: &Database,
     config: &Config,
-    auth_state: &AuthState,
+    auth_state: &mut AuthState,
     provider: &Arc<RustyPipeProvider>,
     tx: &ActionSender,
     thumb_cache: &mut ThumbnailCache,
@@ -158,6 +162,11 @@ fn handle_action(
                     }
                 }
             });
+        }
+        Action::SubmitCommand(ref cmd) => {
+            let cmd = cmd.trim().to_string();
+            state.dispatch(action);
+            execute_command(&cmd, state, config, auth_state, provider);
         }
         Action::Select => {
             // Determine what to load based on current view
@@ -501,4 +510,44 @@ fn record_history(db: &Database, detail: &models::VideoDetail) {
         &detail.item.thumbnail_url,
         detail.item.duration,
     );
+}
+
+fn execute_command(
+    cmd: &str,
+    state: &mut AppState,
+    config: &Config,
+    auth_state: &mut AuthState,
+    provider: &Arc<RustyPipeProvider>,
+) {
+    if cmd == "q" || cmd == "quit" {
+        state.should_quit = true;
+        return;
+    }
+
+    if let Some(path_str) = cmd.strip_prefix("import-cookies ") {
+        let path_str = path_str.trim();
+        let source = std::path::Path::new(path_str);
+        let dest = config.cookie_path();
+
+        match auth::cookies::import_cookie_file(source, &dest) {
+            Ok(()) => {
+                // Reload cookies into the provider
+                if let Ok(content) = std::fs::read_to_string(&dest) {
+                    let provider = Arc::clone(provider);
+                    tokio::spawn(async move {
+                        let _ = provider.set_cookies(&content).await;
+                    });
+                }
+                // Update auth state
+                *auth_state = AuthState::load(config);
+                state.command.message = Some("Cookies imported successfully".into());
+            }
+            Err(e) => {
+                state.command.message = Some(format!("Error: {}", e));
+            }
+        }
+        return;
+    }
+
+    state.command.message = Some(format!("Unknown command: {}", cmd));
 }

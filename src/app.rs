@@ -58,6 +58,13 @@ pub enum Action {
     ThumbnailReady(ThumbnailKey, PathBuf),
     PlayerStateUpdate(MpvPlayerState),
 
+    // Command mode
+    EnterCommandMode,
+    CommandInput(char),
+    CommandBackspace,
+    SubmitCommand(String),
+    CancelCommand,
+
     // App
     Quit,
 }
@@ -79,6 +86,12 @@ pub struct SearchState {
     pub query: String,
     pub cursor: usize,
     pub focused: bool,
+}
+
+pub struct CommandState {
+    pub active: bool,
+    pub input: String,
+    pub message: Option<String>,
 }
 
 pub struct CardGridState {
@@ -117,6 +130,7 @@ pub struct AppState {
     pub previous_views: Vec<View>,
     pub tabs: TabState,
     pub search: SearchState,
+    pub command: CommandState,
     pub cards: CardGridState,
     pub video_list: VideoListState,
     pub detail: Option<DetailState>,
@@ -135,6 +149,11 @@ impl AppState {
                 query: String::new(),
                 cursor: 0,
                 focused: false,
+            },
+            command: CommandState {
+                active: false,
+                input: String::new(),
+                message: None,
             },
             cards: CardGridState {
                 items: Vec::new(),
@@ -228,6 +247,26 @@ impl AppState {
                     self.search.query.drain(start..self.search.cursor);
                     self.search.cursor = start;
                 }
+            }
+            Action::EnterCommandMode => {
+                self.command.active = true;
+                self.command.input.clear();
+                self.command.message = None;
+            }
+            Action::CommandInput(ch) => {
+                self.command.input.push(ch);
+            }
+            Action::CommandBackspace => {
+                self.command.input.pop();
+            }
+            Action::SubmitCommand(_) => {
+                self.command.active = false;
+                // Actual command execution is handled by the caller
+            }
+            Action::CancelCommand => {
+                self.command.active = false;
+                self.command.input.clear();
+                self.command.message = None;
             }
             // Playback actions are handled by the event loop, not dispatch
             Action::PlayVideo(_)

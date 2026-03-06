@@ -12,6 +12,11 @@ pub fn create_action_channel() -> (ActionSender, ActionReceiver) {
 
 /// Map a key event to an Action based on current view state
 pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
+    // If command mode is active, handle command input
+    if state.command.active {
+        return map_command_key(key);
+    }
+
     // If search bar is focused, handle text input
     if state.search.focused {
         return map_search_key(key);
@@ -49,6 +54,9 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::VolumeUp),
         KeyCode::Char('-') => Some(Action::VolumeDown),
 
+        // Command mode
+        KeyCode::Char(':') => Some(Action::EnterCommandMode),
+
         _ => None,
     }
 }
@@ -63,11 +71,28 @@ fn map_search_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn map_command_key(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc => Some(Action::CancelCommand),
+        KeyCode::Enter => None, // SubmitCommand is handled specially in poll_event
+        KeyCode::Backspace => Some(Action::CommandBackspace),
+        KeyCode::Char(c) => Some(Action::CommandInput(c)),
+        _ => None,
+    }
+}
+
 /// Poll for the next action from crossterm events or the async channel.
 /// Returns None if no event occurred within the timeout.
 pub fn poll_event(state: &AppState) -> Option<Action> {
     if event::poll(Duration::from_millis(50)).ok()? {
         if let Event::Key(key) = event::read().ok()? {
+            // Special case: Enter in command mode submits the command
+            if state.command.active && key.code == KeyCode::Enter {
+                if !state.command.input.is_empty() {
+                    return Some(Action::SubmitCommand(state.command.input.clone()));
+                }
+                return Some(Action::CancelCommand);
+            }
             // Special case: Enter in search mode submits the query
             if state.search.focused && key.code == KeyCode::Enter {
                 if !state.search.query.is_empty() {
