@@ -5,30 +5,32 @@ use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-const CARD_WIDTH: u16 = 26;
-const CARD_HEIGHT: u16 = 11;
-const THUMB_HEIGHT: u16 = 4;
+pub const CARD_WIDTH: u16 = 50;
+pub const CARD_HEIGHT: u16 = 16;
+pub const THUMB_HEIGHT: u16 = 8;
 
 pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
     if state.loading.feed_loading && state.cards.items.is_empty() {
         let loading = Paragraph::new("Loading...")
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Content"));
-        f.render_widget(loading, area);
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(loading, Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1));
         return;
     }
 
     if state.cards.items.is_empty() {
-        let empty = Paragraph::new("No content yet. Press / to search.")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Content"));
-        f.render_widget(empty, area);
+        let msg = if state.tabs.active == crate::app::Tab::ForYou {
+            "Subscribe to channels to see their videos here. Press / to search."
+        } else {
+            "No content yet. Press / to search."
+        };
+        let empty = Paragraph::new(msg)
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(empty, Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1));
         return;
     }
 
-    let outer = Block::default().borders(Borders::ALL).title("Content");
-    let inner = outer.inner(area);
-    f.render_widget(outer, area);
+    // Use full area — no outer border to maximize space
+    let inner = area;
 
     // Calculate grid dimensions
     let cols = ((inner.width + 1) / (CARD_WIDTH + 1)).max(1) as usize;
@@ -109,40 +111,56 @@ fn render_card(
     }
 
     let (title, channel, views, time_ago) = format_card_item(item);
-    let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(4));
+    // Reserve lines below thumbnail: title (up to 2), channel (1), meta (1) = 4
+    let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(5));
     let thumb_area = Rect::new(inner.x, inner.y, inner.width, thumb_h);
     render_thumbnail(f, item, thumb_area, thumb_cache);
 
-    // Title (below thumbnail)
     let text_y = inner.y + thumb_area.height;
-    let text_width = inner.width;
+    let w = inner.width as usize;
 
-    if text_y < inner.y + inner.height {
-        let truncated_title = truncate_str(&title, text_width as usize);
-        let title_span = Span::styled(
-            truncated_title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        );
+    // Title (up to 2 lines)
+    let title_chars: Vec<char> = title.chars().collect();
+    let title_lines = if title_chars.len() > w && w > 3 {
+        let line1: String = title_chars[..w].iter().collect();
+        let rest: String = title_chars[w..].iter().collect();
+        vec![line1, truncate_str(&rest, w)]
+    } else {
+        vec![title.clone()]
+    };
+
+    for (i, tline) in title_lines.iter().enumerate() {
+        let y = text_y + i as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
         f.render_widget(
-            Paragraph::new(Line::from(title_span)),
-            Rect::new(inner.x, text_y, text_width, 1),
+            Paragraph::new(Line::from(Span::styled(
+                tline.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            Rect::new(inner.x, y, inner.width, 1),
         );
     }
 
+    let after_title = text_y + title_lines.len() as u16;
+
     // Channel
-    if text_y + 1 < inner.y + inner.height {
-        let truncated_channel = truncate_str(&channel, text_width as usize);
-        let ch_span = Span::styled(truncated_channel, Style::default().fg(Color::DarkGray));
+    if after_title < inner.y + inner.height {
+        let truncated_channel = truncate_str(&channel, w);
         f.render_widget(
-            Paragraph::new(Line::from(ch_span)),
-            Rect::new(inner.x, text_y + 1, text_width, 1),
+            Paragraph::new(Line::from(Span::styled(
+                truncated_channel,
+                Style::default().fg(Color::DarkGray),
+            ))),
+            Rect::new(inner.x, after_title, inner.width, 1),
         );
     }
 
     // Views + time ago
-    if text_y + 2 < inner.y + inner.height {
+    if after_title + 1 < inner.y + inner.height {
         let meta = if time_ago.is_empty() {
             views
         } else if views.is_empty() {
@@ -150,11 +168,13 @@ fn render_card(
         } else {
             format!("{} \u{00b7} {}", views, time_ago)
         };
-        let truncated_meta = truncate_str(&meta, text_width as usize);
-        let meta_span = Span::styled(truncated_meta, Style::default().fg(Color::DarkGray));
+        let truncated_meta = truncate_str(&meta, w);
         f.render_widget(
-            Paragraph::new(Line::from(meta_span)),
-            Rect::new(inner.x, text_y + 2, text_width, 1),
+            Paragraph::new(Line::from(Span::styled(
+                truncated_meta,
+                Style::default().fg(Color::DarkGray),
+            ))),
+            Rect::new(inner.x, after_title + 1, inner.width, 1),
         );
     }
 }

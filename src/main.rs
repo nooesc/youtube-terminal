@@ -405,8 +405,9 @@ fn handle_action(
         }
         Action::ThumbnailReady(ref key, ref path) => {
             // Load the downloaded image into the render cache
-            // Use card grid thumbnail dimensions: width=24 (CARD_WIDTH-2), height=4 (THUMB_HEIGHT)
-            if thumb_cache.load(key, path, 24, 4).is_ok() {
+            let tw = (ui::card_grid::CARD_WIDTH - 2) as u32;
+            let th = ui::card_grid::THUMB_HEIGHT as u32;
+            if thumb_cache.load(key, path, tw, th).is_ok() {
                 let _ = db.set_thumbnail_path(key, path);
                 state.dispatch(action);
             } else {

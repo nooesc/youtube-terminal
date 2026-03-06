@@ -218,7 +218,7 @@ impl AppState {
 
     /// Update the number of grid columns based on current terminal width.
     pub fn update_columns(&mut self, terminal_width: u16) {
-        let card_width = 27u16; // CARD_WIDTH (26) + 1 gap
+        let card_width = crate::ui::card_grid::CARD_WIDTH + 1; // +1 gap
         self.cards.columns = ((terminal_width.saturating_sub(2)) / card_width).max(1) as usize;
     }
 

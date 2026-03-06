@@ -34,6 +34,22 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::Char('1') => Some(Action::SwitchTab(Tab::ForYou)),
         KeyCode::Char('2') => Some(Action::SwitchTab(Tab::Subscriptions)),
         KeyCode::Char('3') => Some(Action::SwitchTab(Tab::History)),
+        KeyCode::Tab => {
+            let next = match state.tabs.active {
+                Tab::ForYou => Tab::Subscriptions,
+                Tab::Subscriptions => Tab::History,
+                Tab::History => Tab::ForYou,
+            };
+            Some(Action::SwitchTab(next))
+        }
+        KeyCode::BackTab => {
+            let prev = match state.tabs.active {
+                Tab::ForYou => Tab::History,
+                Tab::Subscriptions => Tab::ForYou,
+                Tab::History => Tab::Subscriptions,
+            };
+            Some(Action::SwitchTab(prev))
+        }
 
         // Navigation (vim keys)
         KeyCode::Char('h') | KeyCode::Left => Some(Action::Navigate(Direction::Left)),
