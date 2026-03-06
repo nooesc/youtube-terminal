@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
     let detail_state = match &state.channel_detail {
@@ -15,22 +15,28 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
     };
 
     let detail = &detail_state.detail;
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(5)])
+        .constraints([
+            Constraint::Length(5), // header
+            Constraint::Length(3), // subscribe action
+            Constraint::Min(5),   // video list
+        ])
         .split(area);
 
+    // Header
     let subs = detail
         .item
         .subscriber_count
         .map(format_count)
         .unwrap_or_else(|| "hidden".to_string());
-    let videos = detail
+    let videos_count = detail
         .video_count
         .map(|n| n.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let header = Paragraph::new(vec![
+    let mut header_lines = vec![
         Line::from(Span::styled(
             &detail.item.name,
             Style::default()
@@ -38,17 +44,119 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("{subs} subscribers · {videos} videos"),
+            format!("{subs} subscribers \u{00b7} {videos_count} videos"),
             Style::default().fg(Color::Cyan),
         )),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Channel"));
+    ];
+    if !detail.description.is_empty() {
+        let desc_preview: String = detail.description.chars().take(120).collect();
+        let suffix = if detail.description.chars().count() > 120 {
+            "..."
+        } else {
+            ""
+        };
+        header_lines.push(Line::from(Span::styled(
+            format!("{desc_preview}{suffix}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("\u{2190} Back (ESC)"),
+    );
     f.render_widget(header, chunks[0]);
 
-    let body = Paragraph::new(detail.description.as_str())
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("About"));
-    f.render_widget(body, chunks[1]);
+    // Subscribe action
+    let sub_label = if detail_state.is_subscribed {
+        "\u{2605} Unsubscribe"
+    } else {
+        "\u{2606} Subscribe"
+    };
+    let sub_selected = detail_state.selected_action == 0;
+    let sub_style = if sub_selected {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let marker = if sub_selected { "\u{25b8} " } else { "  " };
+    let sub_paragraph = Paragraph::new(Line::from(vec![
+        Span::styled(marker, Style::default().fg(Color::Cyan)),
+        Span::styled(sub_label, sub_style),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(sub_paragraph, chunks[1]);
+
+    // Video list
+    if detail.videos.is_empty() {
+        let empty = Paragraph::new("No videos found")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title("Videos"));
+        f.render_widget(empty, chunks[2]);
+        return;
+    }
+
+    let in_videos = detail_state.selected_action >= 1;
+    let items: Vec<ListItem> = detail
+        .videos
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let selected = in_videos && i == detail_state.selected_video;
+            let marker = if selected { "\u{25b8} " } else { "  " };
+            let title_style = if selected {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let meta = format_video_meta(v.view_count, v.duration.as_ref());
+            let line = Line::from(vec![
+                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(&v.title, title_style),
+                Span::raw("  "),
+                Span::styled(meta, Style::default().fg(Color::DarkGray)),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    if in_videos {
+        list_state.select(Some(detail_state.selected_video));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Videos"))
+        .highlight_style(Style::default().bg(Color::DarkGray));
+
+    f.render_stateful_widget(list, chunks[2], &mut list_state);
+}
+
+fn format_video_meta(view_count: Option<u64>, duration: Option<&std::time::Duration>) -> String {
+    let views = view_count.map(format_count).unwrap_or_default();
+    let dur = duration
+        .map(|d| {
+            let secs = d.as_secs();
+            let m = secs / 60;
+            let s = secs % 60;
+            if m >= 60 {
+                format!("{}:{:02}:{:02}", m / 60, m % 60, s)
+            } else {
+                format!("{}:{:02}", m, s)
+            }
+        })
+        .unwrap_or_default();
+    match (views.is_empty(), dur.is_empty()) {
+        (false, false) => format!("{} \u{00b7} {}", views, dur),
+        (false, true) => views,
+        (true, false) => dur,
+        (true, true) => String::new(),
+    }
 }
 
 fn format_count(n: u64) -> String {
