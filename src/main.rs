@@ -9,7 +9,7 @@ mod provider;
 mod thumbnails;
 mod ui;
 
-use app::{Action, AppState, LoadedPage, Tab, View};
+use app::{Action, AppState, Direction, LoadedPage, Tab, View};
 use auth::AuthState;
 use config::Config;
 use db::Database;
@@ -264,7 +264,17 @@ fn handle_action(
                 auth_state.cookie_path(),
             );
         }
+        Action::Navigate(dir) => {
+            state.dispatch(action);
+            if matches!(dir, Direction::Down) {
+                check_load_more(state, provider, tx);
+            }
+        }
         Action::FeedLoaded(_, _) | Action::SearchResults(_, _) => {
+            state.dispatch(action);
+            spawn_thumbnail_downloads(state, tx, config);
+        }
+        Action::AppendFeed(_, _) | Action::AppendSearch(_, _) => {
             state.dispatch(action);
             spawn_thumbnail_downloads(state, tx, config);
         }
@@ -354,6 +364,90 @@ fn spawn_detail_load(
             }
         }
     });
+}
+
+fn check_load_more(
+    state: &mut AppState,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+) {
+    match &state.view {
+        View::Home => {
+            if state.loading.feed_loading || state.loading.loading_more_feed {
+                return;
+            }
+            let total = state.cards.items.len();
+            let idx = state.selected_card_index();
+            let cols = state.cards.columns.max(1);
+            // Trigger when within last 2 rows
+            if total > 0 && idx >= total.saturating_sub(cols * 2) {
+                if let Some(ctoken) = state.cards.continuation.clone() {
+                    state.loading.loading_more_feed = true;
+                    let req_id = state.loading.feed_request_id;
+                    let tx = tx.clone();
+                    let provider = Arc::clone(provider);
+                    let tab = state.tabs.active;
+
+                    tokio::spawn(async move {
+                        let result = match tab {
+                            Tab::Subscriptions => {
+                                match provider.subscription_feed(Some(&ctoken)).await {
+                                    Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
+                                    Err(e) => {
+                                        eprintln!("Feed continuation error: {}", e);
+                                        None
+                                    }
+                                }
+                            }
+                            // Trending is not paginated; ForYou uses home_feed
+                            Tab::ForYou => match provider.home_feed(Some(&ctoken)).await {
+                                Ok(page) => Some(LoadedPage::Home(page)),
+                                Err(e) => {
+                                    eprintln!("Feed continuation error: {}", e);
+                                    None
+                                }
+                            },
+                            Tab::History => None,
+                        };
+
+                        if let Some(page) = result {
+                            let _ =
+                                tx.send(Action::AppendFeed(req_id, Box::new(page)));
+                        }
+                    });
+                }
+            }
+        }
+        View::Search => {
+            if state.loading.search_loading || state.loading.loading_more_search {
+                return;
+            }
+            let total = state.video_list.items.len();
+            let idx = state.video_list.selected;
+            // Trigger when within last 3 items
+            if total > 0 && idx >= total.saturating_sub(3) {
+                if let Some(ctoken) = state.video_list.continuation.clone() {
+                    state.loading.loading_more_search = true;
+                    let req_id = state.loading.search_request_id;
+                    let query = state.search.query.clone();
+                    let tx = tx.clone();
+                    let provider = Arc::clone(provider);
+
+                    tokio::spawn(async move {
+                        match provider.search(&query, Some(&ctoken)).await {
+                            Ok(page) => {
+                                let _ = tx.send(Action::AppendSearch(req_id, page));
+                            }
+                            Err(e) => {
+                                eprintln!("Search continuation error: {}", e);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn get_video_id(item: &FeedItem) -> Option<String> {

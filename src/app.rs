@@ -52,6 +52,8 @@ pub enum Action {
     // Async results
     FeedLoaded(u64, Box<LoadedPage>),
     SearchResults(u64, FeedPage<FeedItem>),
+    AppendFeed(u64, Box<LoadedPage>),
+    AppendSearch(u64, FeedPage<FeedItem>),
     DetailLoaded(u64, VideoDetail),
     ThumbnailReady(ThumbnailKey, PathBuf),
     PlayerStateUpdate(MpvPlayerState),
@@ -105,6 +107,8 @@ pub struct LoadingState {
     pub search_request_id: u64,
     pub detail_loading: bool,
     pub detail_request_id: u64,
+    pub loading_more_feed: bool,
+    pub loading_more_search: bool,
     pub thumbnail_loading: HashSet<ThumbnailKey>,
 }
 
@@ -153,6 +157,8 @@ impl AppState {
                 search_request_id: 0,
                 detail_loading: false,
                 detail_request_id: 0,
+                loading_more_feed: false,
+                loading_more_search: false,
                 thumbnail_loading: HashSet::new(),
             },
             should_quit: false,
@@ -270,6 +276,45 @@ impl AppState {
                     self.video_list.items = page.items;
                     self.video_list.continuation = page.continuation;
                     self.video_list.selected = 0;
+                }
+            }
+            Action::AppendFeed(req_id, page) => {
+                if req_id == self.loading.feed_request_id {
+                    self.loading.loading_more_feed = false;
+                    match *page {
+                        LoadedPage::Trending(feed) => {
+                            self.cards
+                                .items
+                                .extend(feed.items.into_iter().map(FeedItem::Video));
+                            self.cards.continuation = feed.continuation;
+                        }
+                        LoadedPage::Home(feed) => {
+                            self.cards.items.extend(feed.items);
+                            self.cards.continuation = feed.continuation;
+                        }
+                        LoadedPage::SubscriptionFeed(feed) => {
+                            self.cards
+                                .items
+                                .extend(feed.items.into_iter().map(FeedItem::Video));
+                            self.cards.continuation = feed.continuation;
+                        }
+                        LoadedPage::History(feed) => {
+                            self.cards.items.extend(
+                                feed.items
+                                    .into_iter()
+                                    .map(|e| FeedItem::Video(e.video)),
+                            );
+                            self.cards.continuation = feed.continuation;
+                        }
+                        LoadedPage::Subscriptions(_) => {}
+                    }
+                }
+            }
+            Action::AppendSearch(req_id, page) => {
+                if req_id == self.loading.search_request_id {
+                    self.loading.loading_more_search = false;
+                    self.video_list.items.extend(page.items);
+                    self.video_list.continuation = page.continuation;
                 }
             }
             Action::DetailLoaded(req_id, detail) => {
@@ -514,5 +559,111 @@ mod tests {
         assert_eq!(state.video_list.selected, 1); // can't go past end
         state.dispatch(Action::Navigate(Direction::Up));
         assert_eq!(state.video_list.selected, 0);
+    }
+
+    fn make_video(id: &str) -> FeedItem {
+        FeedItem::Video(VideoItem {
+            id: id.into(),
+            title: id.into(),
+            channel: "".into(),
+            channel_id: "".into(),
+            view_count: None,
+            duration: None,
+            published: None,
+            thumbnail_url: "".into(),
+        })
+    }
+
+    #[test]
+    fn test_append_search_extends_items() {
+        let mut state = AppState::new();
+        state.loading.search_request_id = 1;
+        // Simulate initial search results
+        state.dispatch(Action::SearchResults(
+            1,
+            FeedPage {
+                items: vec![make_video("1"), make_video("2")],
+                continuation: Some("token_a".into()),
+            },
+        ));
+        assert_eq!(state.video_list.items.len(), 2);
+        assert_eq!(state.video_list.continuation, Some("token_a".into()));
+
+        // Navigate to item 1
+        state.view = View::Search;
+        state.dispatch(Action::Navigate(Direction::Down));
+        assert_eq!(state.video_list.selected, 1);
+
+        // Simulate continuation append
+        state.loading.loading_more_search = true;
+        state.dispatch(Action::AppendSearch(
+            1,
+            FeedPage {
+                items: vec![make_video("3"), make_video("4")],
+                continuation: Some("token_b".into()),
+            },
+        ));
+
+        // Items should be appended, not replaced
+        assert_eq!(state.video_list.items.len(), 4);
+        assert_eq!(state.video_list.continuation, Some("token_b".into()));
+        // Selected index should NOT be reset
+        assert_eq!(state.video_list.selected, 1);
+        assert!(!state.loading.loading_more_search);
+    }
+
+    #[test]
+    fn test_append_search_stale_request_ignored() {
+        let mut state = AppState::new();
+        state.loading.search_request_id = 5;
+        state.video_list.items = vec![make_video("1")];
+
+        // Stale request should be ignored
+        state.dispatch(Action::AppendSearch(
+            3,
+            FeedPage {
+                items: vec![make_video("x")],
+                continuation: None,
+            },
+        ));
+        assert_eq!(state.video_list.items.len(), 1);
+    }
+
+    #[test]
+    fn test_append_feed_extends_items() {
+        let mut state = AppState::new();
+        state.loading.feed_request_id = 1;
+        // Simulate initial feed
+        state.dispatch(Action::FeedLoaded(
+            1,
+            Box::new(LoadedPage::Trending(FeedPage {
+                items: vec![VideoItem {
+                    id: "1".into(),
+                    title: "A".into(),
+                    channel: "".into(),
+                    channel_id: "".into(),
+                    view_count: None,
+                    duration: None,
+                    published: None,
+                    thumbnail_url: "".into(),
+                }],
+                continuation: Some("feed_token".into()),
+            })),
+        ));
+        assert_eq!(state.cards.items.len(), 1);
+
+        // Simulate continuation append
+        state.loading.loading_more_feed = true;
+        state.dispatch(Action::AppendFeed(
+            1,
+            Box::new(LoadedPage::Home(FeedPage {
+                items: vec![make_video("2"), make_video("3")],
+                continuation: None,
+            })),
+        ));
+
+        assert_eq!(state.cards.items.len(), 3);
+        assert_eq!(state.cards.continuation, None);
+        assert!(!state.loading.loading_more_feed);
     }
 }
