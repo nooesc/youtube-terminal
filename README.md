@@ -6,11 +6,11 @@ terminal.
 
 Built with [ratatui](https://ratatui.rs) for the TUI,
 [mpv](https://mpv.io) for playback, and
-[RustyPipe](https://github.com/TeamNewPipe/RustyPipe) for YouTube data.
+[RustyPipe](https://codeberg.org/ThetaDev/rustypipe) for YouTube data.
 
 ## Prerequisites
 
-- **Rust toolchain** (1.70+) -- install via [rustup](https://rustup.rs)
+- **Rust toolchain** (1.73+) -- install via [rustup](https://rustup.rs)
 - **mpv** -- media player for video/audio playback
 - **yt-dlp** -- used by mpv to resolve YouTube URLs
 
@@ -78,7 +78,7 @@ permissions (0600).
 | `Esc`                      | Back                      |
 | `Space`                    | Toggle pause              |
 | `<` / `>`                  | Seek -10s / +10s          |
-| `+` / `-`                  | Volume up / down          |
+| `+` / `=` / `-`            | Volume up / down          |
 | `:`                        | Command mode              |
 
 ### Commands
