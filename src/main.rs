@@ -158,7 +158,7 @@ fn handle_action(
                         let _ = tx.send(Action::SearchResults(req_id, page));
                     }
                     Err(e) => {
-                        eprintln!("Search error: {}", e);
+                        let _ = tx.send(Action::ShowError(format!("Search error: {}", e)));
                     }
                 }
             });
@@ -192,25 +192,33 @@ fn handle_action(
                         match detail_state.selected_action {
                             0 => {
                                 // Play Video
-                                let _ = player.play(
+                                if let Err(e) = player.play(
                                     &format!("https://www.youtube.com/watch?v={}", video_id),
                                     PlayMode::Video,
                                     &config.mpv_geometry,
                                     config.mpv_ontop,
                                     cookie_path,
-                                );
-                                record_history(db, &detail_state.detail);
+                                ) {
+                                    state.command.message =
+                                        Some(format!("Playback error: {} (is mpv installed?)", e));
+                                } else {
+                                    record_history(db, &detail_state.detail);
+                                }
                             }
                             1 => {
                                 // Play Audio Only
-                                let _ = player.play(
+                                if let Err(e) = player.play(
                                     &format!("https://www.youtube.com/watch?v={}", video_id),
                                     PlayMode::AudioOnly,
                                     &config.mpv_geometry,
                                     config.mpv_ontop,
                                     cookie_path,
-                                );
-                                record_history(db, &detail_state.detail);
+                                ) {
+                                    state.command.message =
+                                        Some(format!("Playback error: {} (is mpv installed?)", e));
+                                } else {
+                                    record_history(db, &detail_state.detail);
+                                }
                             }
                             2 => {
                                 // Open Channel -- navigate to channel detail
@@ -256,22 +264,28 @@ fn handle_action(
             }
         }
         Action::PlayVideo(ref id) => {
-            let _ = player.play(
+            if let Err(e) = player.play(
                 &format!("https://www.youtube.com/watch?v={}", id),
                 PlayMode::Video,
                 &config.mpv_geometry,
                 config.mpv_ontop,
                 auth_state.cookie_path(),
-            );
+            ) {
+                state.command.message =
+                    Some(format!("Playback error: {} (is mpv installed?)", e));
+            }
         }
         Action::PlayAudio(ref id) => {
-            let _ = player.play(
+            if let Err(e) = player.play(
                 &format!("https://www.youtube.com/watch?v={}", id),
                 PlayMode::AudioOnly,
                 &config.mpv_geometry,
                 config.mpv_ontop,
                 auth_state.cookie_path(),
-            );
+            ) {
+                state.command.message =
+                    Some(format!("Playback error: {} (is mpv installed?)", e));
+            }
         }
         Action::Navigate(dir) => {
             state.dispatch(action);
@@ -330,14 +344,17 @@ fn spawn_feed_load(
             Tab::ForYou => match provider.trending().await {
                 Ok(page) => Some(LoadedPage::Trending(page)),
                 Err(e) => {
-                    eprintln!("Feed error: {}", e);
+                    let _ = tx.send(Action::ShowError(format!("Feed error: {}", e)));
                     None
                 }
             },
             Tab::Subscriptions => match provider.subscription_feed(None).await {
                 Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
                 Err(e) => {
-                    eprintln!("Subscriptions error: {}", e);
+                    let _ = tx.send(Action::ShowError(format!(
+                        "Subscriptions error: {}",
+                        e
+                    )));
                     None
                 }
             },
@@ -369,7 +386,7 @@ fn spawn_detail_load(
                 let _ = tx.send(Action::DetailLoaded(req_id, detail));
             }
             Err(e) => {
-                eprintln!("Detail error: {}", e);
+                let _ = tx.send(Action::ShowError(format!("Detail error: {}", e)));
             }
         }
     });
@@ -403,7 +420,7 @@ fn check_load_more(
                                 match provider.subscription_feed(Some(&ctoken)).await {
                                     Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
                                     Err(e) => {
-                                        eprintln!("Feed continuation error: {}", e);
+                                        let _ = tx.send(Action::ShowError(format!("Feed continuation error: {}", e)));
                                         None
                                     }
                                 }
@@ -448,7 +465,10 @@ fn check_load_more(
                                 let _ = tx.send(Action::AppendSearch(req_id, page));
                             }
                             Err(e) => {
-                                eprintln!("Search continuation error: {}", e);
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Search continuation error: {}",
+                                    e
+                                )));
                             }
                         }
                     });

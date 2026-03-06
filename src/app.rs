@@ -65,6 +65,9 @@ pub enum Action {
     SubmitCommand(String),
     CancelCommand,
 
+    // Errors
+    ShowError(String),
+
     // App
     Quit,
 }
@@ -373,6 +376,15 @@ impl AppState {
             }
             Action::PlayerStateUpdate(state) => {
                 self.player_state = state;
+            }
+            Action::ShowError(msg) => {
+                self.command.message = Some(msg);
+                // Clear loading flags so the UI doesn't stay in a loading state
+                self.loading.feed_loading = false;
+                self.loading.search_loading = false;
+                self.loading.detail_loading = false;
+                self.loading.loading_more_feed = false;
+                self.loading.loading_more_search = false;
             }
             Action::Quit => {
                 self.should_quit = true;
