@@ -11,12 +11,11 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        let base = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.config"))
             .join("youtube-terminal");
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.cache"))
-            .join("youtube-terminal");
+        let data_dir = base.clone();
+        let cache_dir = base.join("cache");
         Self {
             mpv_geometry: "400x225+0+0".to_string(),
             mpv_ontop: true,
