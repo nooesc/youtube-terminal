@@ -36,24 +36,55 @@ pub fn parse_netscape_cookies(content: &str) -> Result<Vec<Cookie>> {
     Ok(cookies)
 }
 
-/// Import a cookie file: copy to destination with restricted permissions
+/// Filter a Netscape cookie file to only YouTube/Google domains.
+fn filter_youtube_cookies(content: &str) -> String {
+    let dominated_by = |domain: &str| -> bool {
+        let d = domain.trim_start_matches('.');
+        d == "youtube.com"
+            || d.ends_with(".youtube.com")
+            || d == "google.com"
+            || d.ends_with(".google.com")
+            || d == "googlevideo.com"
+            || d.ends_with(".googlevideo.com")
+    };
+
+    let mut out = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if let Some(domain) = trimmed.split('\t').next() {
+            if dominated_by(domain) {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Import a cookie file: filter to YouTube/Google, save to destination with restricted permissions
 pub fn import_cookie_file(source: &Path, dest: &Path) -> Result<()> {
     // Validate source exists
     if !source.exists() {
         bail!("cookie file not found: {}", source.display());
     }
 
-    // Read and validate content
+    // Read, filter to YouTube domains, and validate
     let content = std::fs::read_to_string(source).context("failed to read cookie file")?;
-    let _ = parse_netscape_cookies(&content)?;
+    let filtered = filter_youtube_cookies(&content);
+    let _ = parse_netscape_cookies(&filtered)?;
 
     // Create destination directory
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).context("failed to create cookie directory")?;
     }
 
-    // Copy file
-    std::fs::copy(source, dest).context("failed to copy cookie file")?;
+    // Write filtered cookies
+    std::fs::write(dest, &filtered).context("failed to write cookie file")?;
 
     // Set permissions to 0600 (owner read/write only)
     #[cfg(unix)]
