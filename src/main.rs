@@ -2,6 +2,7 @@ mod app;
 mod auth;
 mod config;
 mod db;
+mod event;
 mod models;
 mod player;
 mod provider;
