@@ -69,6 +69,8 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::Char('<') => Some(Action::Seek(-10.0)),
         KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::VolumeUp),
         KeyCode::Char('-') => Some(Action::VolumeDown),
+        KeyCode::Char('Q') => Some(Action::TogglePlaybackQuality),
+        KeyCode::Char('X') => Some(Action::StopPlayerAndQuit),
 
         // Subscribe/Unsubscribe toggle
         KeyCode::Char('S') => Some(Action::SubscribeSelected),

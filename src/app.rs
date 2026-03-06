@@ -1,9 +1,12 @@
 use crate::models::*;
-use crate::player::PlayerState as MpvPlayerState;
+use crate::player::{PlaybackQuality, PlaybackSession, PlayerState as MpvPlayerState};
+use crate::session::PendingSessionRestore;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Instant;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum View {
     Home,
     Search,
@@ -12,7 +15,7 @@ pub enum View {
     PlaylistDetail(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tab {
     ForYou,
     Subscriptions,
@@ -50,6 +53,10 @@ pub enum Action {
     Seek(f64),
     VolumeUp,
     VolumeDown,
+    TogglePlaybackQuality,
+    PlaybackLoadSlow(u64),
+    StopPlayer,
+    StopPlayerAndQuit,
 
     // Async results
     FeedLoaded(u64, Box<LoadedPage>),
@@ -147,6 +154,14 @@ pub struct LoadingState {
     pub loading_more_feed: bool,
     pub loading_more_search: bool,
     pub thumbnail_loading: HashSet<ThumbnailKey>,
+    pub playback_request_id: u64,
+}
+
+pub struct PlaybackLoadState {
+    pub request_id: u64,
+    pub label: String,
+    pub started_at: Instant,
+    pub slow: bool,
 }
 
 pub struct AppState {
@@ -162,7 +177,12 @@ pub struct AppState {
     pub playlist_detail: Option<PlaylistDetailState>,
     pub subscription_channels: Vec<ChannelItem>,
     pub player_state: MpvPlayerState,
+    pub playback_quality: PlaybackQuality,
+    pub current_playback: Option<PlaybackSession>,
+    pub playback_loading: Option<PlaybackLoadState>,
+    pub pending_restore: Option<PendingSessionRestore>,
     pub loading: LoadingState,
+    pub stop_player_on_exit: bool,
     pub should_quit: bool,
 }
 
@@ -201,6 +221,10 @@ impl AppState {
             playlist_detail: None,
             subscription_channels: Vec::new(),
             player_state: MpvPlayerState::Stopped,
+            playback_quality: PlaybackQuality::P1080,
+            current_playback: None,
+            playback_loading: None,
+            pending_restore: None,
             loading: LoadingState {
                 feed_loading: false,
                 feed_request_id: 0,
@@ -211,7 +235,9 @@ impl AppState {
                 loading_more_feed: false,
                 loading_more_search: false,
                 thumbnail_loading: HashSet::new(),
+                playback_request_id: 0,
             },
+            stop_player_on_exit: false,
             should_quit: false,
         }
     }
@@ -313,7 +339,17 @@ impl AppState {
             | Action::TogglePause
             | Action::Seek(_)
             | Action::VolumeUp
-            | Action::VolumeDown => {}
+            | Action::VolumeDown
+            | Action::TogglePlaybackQuality
+            | Action::StopPlayer
+            | Action::StopPlayerAndQuit => {}
+            Action::PlaybackLoadSlow(req_id) => {
+                if let Some(ref mut load) = self.playback_loading {
+                    if load.request_id == req_id {
+                        load.slow = true;
+                    }
+                }
+            }
             Action::FeedLoaded(req_id, page) => {
                 if req_id == self.loading.feed_request_id {
                     self.loading.feed_loading = false;
@@ -379,8 +415,10 @@ impl AppState {
                         detail,
                         selected_action: 0,
                     });
-                    self.previous_views.push(self.view.clone());
-                    self.view = View::VideoDetail(video_id);
+                    if !matches!(&self.view, View::VideoDetail(current) if current == &video_id) {
+                        self.previous_views.push(self.view.clone());
+                        self.view = View::VideoDetail(video_id);
+                    }
                 }
             }
             Action::ChannelDetailLoaded(req_id, detail) => {
@@ -393,8 +431,11 @@ impl AppState {
                         selected_video: 0,
                         is_subscribed: false, // Will be set by caller after dispatch
                     });
-                    self.previous_views.push(self.view.clone());
-                    self.view = View::ChannelDetail(channel_id);
+                    if !matches!(&self.view, View::ChannelDetail(current) if current == &channel_id)
+                    {
+                        self.previous_views.push(self.view.clone());
+                        self.view = View::ChannelDetail(channel_id);
+                    }
                 }
             }
             Action::PlaylistDetailLoaded(req_id, detail) => {
@@ -405,8 +446,13 @@ impl AppState {
                         detail,
                         selected_action: 0,
                     });
-                    self.previous_views.push(self.view.clone());
-                    self.view = View::PlaylistDetail(playlist_id);
+                    if !matches!(
+                        &self.view,
+                        View::PlaylistDetail(current) if current == &playlist_id
+                    ) {
+                        self.previous_views.push(self.view.clone());
+                        self.view = View::PlaylistDetail(playlist_id);
+                    }
                 }
             }
             Action::ThumbnailReady(key, _path) => {
@@ -416,6 +462,11 @@ impl AppState {
                 self.loading.thumbnail_loading.remove(&key);
             }
             Action::PlayerStateUpdate(state) => {
+                if !matches!(state, MpvPlayerState::Stopped) {
+                    self.playback_loading = None;
+                } else if self.playback_loading.is_none() {
+                    self.current_playback = None;
+                }
                 self.player_state = state;
             }
             Action::Subscribe(_) | Action::Unsubscribe(_) | Action::SubscribeSelected => {
@@ -429,6 +480,7 @@ impl AppState {
                 self.loading.detail_loading = false;
                 self.loading.loading_more_feed = false;
                 self.loading.loading_more_search = false;
+                self.playback_loading = None;
             }
             Action::Quit => {
                 self.should_quit = true;
@@ -619,6 +671,7 @@ mod tests {
         let state = AppState::new();
         assert_eq!(state.view, View::Home);
         assert_eq!(state.tabs.active, Tab::ForYou);
+        assert_eq!(state.playback_quality, PlaybackQuality::P1080);
         assert!(!state.should_quit);
     }
 

@@ -1,8 +1,10 @@
-use super::{PlayMode, PlayerInfo, PlayerState};
+use super::{PlayMode, PlaybackQuality, PlayerInfo, PlayerState};
+use crate::config::Config;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::Duration;
@@ -28,6 +30,59 @@ fn send_command_on_stream(stream: &mut UnixStream, cmd: &[Value]) -> Result<Opti
             .unwrap_or("unknown error");
         bail!("mpv command error: {}", err)
     }
+}
+
+fn build_launch_args(
+    socket_path: &Path,
+    url: &str,
+    mode: PlayMode,
+    quality: PlaybackQuality,
+    config: &Config,
+    log_path: &Path,
+    cookie_path: Option<&Path>,
+) -> Vec<String> {
+    let force_seekable = if config.mpv_force_seekable {
+        "yes"
+    } else {
+        "no"
+    };
+    let mut args = vec![
+        format!("--input-ipc-server={}", socket_path.display()),
+        format!("--log-file={}", log_path.display()),
+        "--cache=yes".to_string(),
+        "--cache-pause=yes".to_string(),
+        format!("--hwdec={}", config.mpv_hwdec),
+        format!("--cache-secs={}", config.mpv_cache_secs),
+        format!("--cache-pause-wait={}", config.mpv_cache_pause_wait),
+        format!("--force-seekable={force_seekable}"),
+        format!("--demuxer-max-bytes={}", config.mpv_demuxer_max_bytes),
+        format!(
+            "--demuxer-max-back-bytes={}",
+            config.mpv_demuxer_max_back_bytes
+        ),
+        format!("--ytdl-format={}", quality.ytdl_format()),
+    ];
+
+    match mode {
+        PlayMode::Video => {
+            args.push(format!("--geometry={}", config.mpv_geometry));
+            if config.mpv_ontop {
+                args.push("--ontop".to_string());
+            }
+        }
+        PlayMode::AudioOnly => {
+            args.push("--no-video".to_string());
+        }
+    }
+
+    if let Some(cookie) = cookie_path {
+        if cookie.exists() {
+            args.push(format!("--ytdl-raw-options=cookies={}", cookie.display()));
+        }
+    }
+
+    args.push(url.to_string());
+    args
 }
 
 pub fn poll_socket_state(socket_path: &Path) -> PlayerState {
@@ -95,19 +150,17 @@ pub struct MpvPlayer {
     socket_path: PathBuf,
     process: Option<Child>,
     stream: Option<UnixStream>,
+    owns_process: bool,
 }
 
 #[allow(dead_code)]
 impl MpvPlayer {
-    pub fn new() -> Self {
-        let pid = std::process::id();
-        let socket_path = PathBuf::from(format!("/tmp/yt-term-{}.sock", pid));
-        // Clean up stale socket from previous crash
-        let _ = std::fs::remove_file(&socket_path);
+    pub fn new(socket_path: PathBuf) -> Self {
         Self {
             socket_path,
             process: None,
             stream: None,
+            owns_process: false,
         }
     }
 
@@ -115,47 +168,60 @@ impl MpvPlayer {
         &self.socket_path
     }
 
+    pub fn attach_if_running(&mut self) -> bool {
+        if !self.socket_path.exists() {
+            return false;
+        }
+        self.process = None;
+        self.stream = None;
+        self.owns_process = false;
+        self.ensure_connected().is_ok()
+    }
+
     pub fn play(
         &mut self,
         url: &str,
         mode: PlayMode,
-        geometry: &str,
-        ontop: bool,
+        quality: PlaybackQuality,
+        config: &Config,
         cookie_path: Option<&Path>,
     ) -> Result<()> {
         // Kill existing process if any
         self.stop();
+        let _ = std::fs::remove_file(&self.socket_path);
 
+        let log_path = config.mpv_log_path();
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let mut cmd = Command::new("mpv");
-        cmd.arg(format!("--input-ipc-server={}", self.socket_path.display()));
-
-        match mode {
-            PlayMode::Video => {
-                cmd.arg(format!("--geometry={}", geometry));
-                if ontop {
-                    cmd.arg("--ontop");
-                }
-            }
-            PlayMode::AudioOnly => {
-                cmd.arg("--no-video");
-            }
-        }
-
-        if let Some(cookie) = cookie_path {
-            if cookie.exists() {
-                cmd.arg(format!("--ytdl-raw-options=cookies={}", cookie.display()));
-            }
-        }
-
-        cmd.arg(url);
+        cmd.stdin(std::process::Stdio::null());
+        cmd.args(build_launch_args(
+            &self.socket_path,
+            url,
+            mode,
+            quality,
+            config,
+            &log_path,
+            cookie_path,
+        ));
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
 
         let child = cmd
             .spawn()
             .context("failed to spawn mpv — is it installed?")?;
         self.process = Some(child);
         self.stream = None;
+        self.owns_process = true;
 
         Ok(())
     }
@@ -207,7 +273,12 @@ impl MpvPlayer {
     }
 
     pub fn seek(&mut self, seconds: f64) -> Result<()> {
-        self.send_command(&[json!("seek"), json!(seconds), json!("relative")])?;
+        self.send_command(&[json!("seek"), json!(seconds), json!("relative+exact")])?;
+        Ok(())
+    }
+
+    pub fn seek_to(&mut self, seconds: f64) -> Result<()> {
+        self.send_command(&[json!("seek"), json!(seconds), json!("absolute+exact")])?;
         Ok(())
     }
 
@@ -216,10 +287,6 @@ impl MpvPlayer {
     }
 
     pub fn poll_state(&mut self) -> Result<PlayerState> {
-        if self.stream.is_none() {
-            return Ok(PlayerState::Stopped);
-        }
-
         // Check if process is still alive
         if let Some(ref mut child) = self.process {
             match child.try_wait() {
@@ -234,6 +301,15 @@ impl MpvPlayer {
                     return Ok(PlayerState::Stopped);
                 }
             }
+        }
+
+        if !self.socket_path.exists() {
+            self.stream = None;
+            return Ok(PlayerState::Stopped);
+        }
+
+        if self.stream.is_none() && self.ensure_connected().is_err() {
+            return Ok(PlayerState::Stopped);
         }
 
         let paused = self
@@ -282,11 +358,12 @@ impl MpvPlayer {
 
     pub fn stop(&mut self) {
         if let Some(ref mut stream) = self.stream {
-            let msg = json!({"command": ["quit"]});
-            let mut line = serde_json::to_string(&msg).unwrap_or_default();
-            line.push('\n');
-            let _ = stream.write_all(line.as_bytes());
-            let _ = stream.flush();
+            let _ = send_command_on_stream(stream, &[json!("quit")]);
+        } else if self.socket_path.exists() {
+            if let Ok(mut stream) = UnixStream::connect(&self.socket_path) {
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+                let _ = send_command_on_stream(&mut stream, &[json!("quit")]);
+            }
         }
 
         if let Some(ref mut child) = self.process {
@@ -306,39 +383,101 @@ impl MpvPlayer {
         self.cleanup();
     }
 
+    pub fn detach(&mut self) {
+        self.process = None;
+        self.stream = None;
+        self.owns_process = false;
+    }
+
     fn cleanup(&mut self) {
         self.stream = None;
         self.process = None;
+        self.owns_process = false;
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
 impl Drop for MpvPlayer {
-    fn drop(&mut self) {
-        self.stop();
-    }
+    fn drop(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
-    fn test_socket_path_contains_pid() {
-        let player = MpvPlayer::new();
-        let pid = std::process::id();
-        assert!(player
-            .socket_path()
-            .to_string_lossy()
-            .contains(&pid.to_string()));
+    fn test_socket_path_is_configured() {
+        let socket_path = PathBuf::from("/tmp/test-mpv.sock");
+        let player = MpvPlayer::new(socket_path.clone());
+        assert_eq!(player.socket_path(), socket_path.as_path());
     }
 
     #[test]
     fn test_new_player_is_stopped() {
-        let mut player = MpvPlayer::new();
+        let mut player = MpvPlayer::new(PathBuf::from("/tmp/test-mpv-stopped.sock"));
         match player.poll_state().unwrap() {
             PlayerState::Stopped => {}
             _ => panic!("new player should be stopped"),
         }
+    }
+
+    #[test]
+    fn test_build_launch_args_enable_long_video_buffering() {
+        let config = Config::default();
+        let args = build_launch_args(
+            Path::new("/tmp/test.sock"),
+            "https://www.youtube.com/watch?v=abc123",
+            PlayMode::Video,
+            PlaybackQuality::P1080,
+            &config,
+            Path::new("/tmp/mpv.log"),
+            None,
+        );
+
+        assert!(args.iter().any(|arg| arg == "--hwdec=auto-safe"));
+        assert!(args.iter().any(|arg| arg == "--cache=yes"));
+        assert!(args.iter().any(|arg| arg == "--cache-pause=yes"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == &format!("--cache-secs={}", config.mpv_cache_secs)));
+        assert!(args
+            .iter()
+            .any(|arg| arg == &format!("--cache-pause-wait={}", config.mpv_cache_pause_wait)));
+        assert!(args
+            .iter()
+            .any(|arg| arg == &format!("--demuxer-max-bytes={}", config.mpv_demuxer_max_bytes)));
+        assert!(args.iter().any(|arg| {
+            arg == &format!(
+                "--demuxer-max-back-bytes={}",
+                config.mpv_demuxer_max_back_bytes
+            )
+        }));
+        assert!(args.iter().any(|arg| arg == "--ontop"));
+        assert!(args
+            .iter()
+            .any(|arg| arg
+                == "--ytdl-format=bestvideo[vcodec!*=av01][height<=1080]+bestaudio/best[height<=1080]/best"));
+    }
+
+    #[test]
+    fn test_build_launch_args_use_no_video_for_audio_mode() {
+        let config = Config::default();
+        let args = build_launch_args(
+            Path::new("/tmp/test.sock"),
+            "https://www.youtube.com/watch?v=abc123",
+            PlayMode::AudioOnly,
+            PlaybackQuality::P720,
+            &config,
+            Path::new("/tmp/mpv.log"),
+            None,
+        );
+
+        assert!(args.iter().any(|arg| arg == "--no-video"));
+        assert!(!args.iter().any(|arg| arg.starts_with("--geometry=")));
+        assert!(args
+            .iter()
+            .any(|arg| arg
+                == "--ytdl-format=bestvideo[vcodec!*=av01][height<=720]+bestaudio/best[height<=720]/best"));
     }
 }

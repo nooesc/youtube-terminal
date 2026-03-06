@@ -6,19 +6,21 @@ mod event;
 mod models;
 mod player;
 mod provider;
+mod session;
 mod thumbnails;
 mod ui;
 
-use app::{Action, AppState, Direction, LoadedPage, Tab, View};
+use app::{Action, AppState, Direction, LoadedPage, PlaybackLoadState, Tab, View};
 use auth::AuthState;
 use config::Config;
 use db::Database;
 use event::{create_action_channel, poll_event, ActionSender};
 use models::{FeedItem, ItemType, VideoItem};
 use player::mpv::{poll_socket_state, MpvPlayer};
-use player::PlayMode;
+use player::{PlayMode, PlaybackSession};
 use provider::rustypipe_provider::RustyPipeProvider;
 use provider::ContentProvider;
+use session::PersistedSessionState;
 use thumbnails::ThumbnailCache;
 
 use crossterm::{
@@ -42,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Load config
     let config = Config::load()?;
+    let _ = std::fs::create_dir_all(config.session_dir());
+    let saved_session = session::load(&config.session_state_path()).unwrap_or(None);
 
     // 2. Init database
     let db = Database::open(&config.db_path())?;
@@ -63,10 +67,11 @@ async fn main() -> anyhow::Result<()> {
     let provider = Arc::new(provider);
 
     // 5. Init player
-    let mut player = MpvPlayer::new();
+    let mut player = MpvPlayer::new(config.player_socket_path());
 
     // 6. Init app state
     let mut state = AppState::new();
+    state.playback_quality = config.default_playback_quality;
     let mut thumb_cache = ThumbnailCache::new();
 
     // 7. Create action channels
@@ -80,8 +85,12 @@ async fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // 9. Spawn initial feed load
-    spawn_feed_load(&mut state, &provider, &tx, &db);
+    // 9. Restore previous state if available, otherwise load the default feed
+    if let Some(saved) = saved_session {
+        restore_saved_session(&saved, &mut state, &mut player, &provider, &tx, &db);
+    } else {
+        spawn_feed_load(&mut state, &provider, &tx, &db);
+    }
 
     // 10. Main loop
     loop {
@@ -131,7 +140,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 11. Cleanup
-    player.stop();
+    let _ = persist_session(&state, &config);
+    if state.stop_player_on_exit {
+        player.stop();
+    } else {
+        player.detach();
+    }
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
@@ -154,25 +168,12 @@ fn handle_action(
         Action::SubmitSearch(ref query) => {
             let query = query.clone();
             state.dispatch(action);
-            // Spawn search task
-            let tx = tx.clone();
-            let provider = Arc::clone(provider);
-            let req_id = state.loading.search_request_id;
-            tokio::spawn(async move {
-                match provider.search(&query, None).await {
-                    Ok(page) => {
-                        let _ = tx.send(Action::SearchResults(req_id, page));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::ShowError(format!("Search error: {}", e)));
-                    }
-                }
-            });
+            spawn_search_load(state, &query, provider, tx);
         }
         Action::SubmitCommand(ref cmd) => {
             let cmd = cmd.trim().to_string();
             state.dispatch(action);
-            execute_command(&cmd, state, config, auth_state);
+            execute_command(&cmd, state, player, config, auth_state);
         }
         Action::Select => {
             // Determine what to load based on current view
@@ -197,38 +198,44 @@ fn handle_action(
                     }
                 }
                 View::VideoDetail(_) => {
-                    if let Some(detail_state) = &state.detail {
-                        let video_id = detail_state.detail.item.id.clone();
-                        let cookie_path = auth_state.cookie_path();
+                    if let Some(detail_state) = state.detail.as_ref() {
+                        let detail = detail_state.detail.clone();
+                        let video_id = detail.item.id.clone();
                         match detail_state.selected_action {
                             0 => {
-                                // Play Video
-                                if let Err(e) = player.play(
-                                    &format!("https://www.youtube.com/watch?v={}", video_id),
+                                let url = format!("https://www.youtube.com/watch?v={}", video_id);
+                                if let Err(e) = start_playback(
+                                    state,
+                                    player,
+                                    config,
+                                    auth_state,
+                                    tx,
+                                    &url,
                                     PlayMode::Video,
-                                    &config.mpv_geometry,
-                                    config.mpv_ontop,
-                                    cookie_path,
+                                    detail.item.title.clone(),
                                 ) {
                                     state.command.message =
                                         Some(format!("Playback error: {} (is mpv installed?)", e));
                                 } else {
-                                    record_history(db, &detail_state.detail);
+                                    record_history(db, &detail);
                                 }
                             }
                             1 => {
-                                // Play Audio Only
-                                if let Err(e) = player.play(
-                                    &format!("https://www.youtube.com/watch?v={}", video_id),
+                                let url = format!("https://www.youtube.com/watch?v={}", video_id);
+                                if let Err(e) = start_playback(
+                                    state,
+                                    player,
+                                    config,
+                                    auth_state,
+                                    tx,
+                                    &url,
                                     PlayMode::AudioOnly,
-                                    &config.mpv_geometry,
-                                    config.mpv_ontop,
-                                    cookie_path,
+                                    detail.item.title.clone(),
                                 ) {
                                     state.command.message =
                                         Some(format!("Playback error: {} (is mpv installed?)", e));
                                 } else {
-                                    record_history(db, &detail_state.detail);
+                                    record_history(db, &detail);
                                 }
                             }
                             2 => {
@@ -243,35 +250,42 @@ fn handle_action(
                     }
                 }
                 View::PlaylistDetail(_) => {
-                    if let Some(detail_state) = &state.playlist_detail {
+                    if let Some(detail_state) = state.playlist_detail.as_ref() {
                         let playlist_id = detail_state.detail.item.id.clone();
-                        let cookie_path = auth_state.cookie_path();
                         match detail_state.selected_action {
                             0 => {
-                                if let Err(e) = player.play(
-                                    &format!(
-                                        "https://www.youtube.com/playlist?list={}",
-                                        playlist_id
-                                    ),
+                                let url = format!(
+                                    "https://www.youtube.com/playlist?list={}",
+                                    playlist_id
+                                );
+                                if let Err(e) = start_playback(
+                                    state,
+                                    player,
+                                    config,
+                                    auth_state,
+                                    tx,
+                                    &url,
                                     PlayMode::Video,
-                                    &config.mpv_geometry,
-                                    config.mpv_ontop,
-                                    cookie_path,
+                                    detail_state.detail.item.title.clone(),
                                 ) {
                                     state.command.message =
                                         Some(format!("Playback error: {} (is mpv installed?)", e));
                                 }
                             }
                             1 => {
-                                if let Err(e) = player.play(
-                                    &format!(
-                                        "https://www.youtube.com/playlist?list={}",
-                                        playlist_id
-                                    ),
+                                let url = format!(
+                                    "https://www.youtube.com/playlist?list={}",
+                                    playlist_id
+                                );
+                                if let Err(e) = start_playback(
+                                    state,
+                                    player,
+                                    config,
+                                    auth_state,
+                                    tx,
+                                    &url,
                                     PlayMode::AudioOnly,
-                                    &config.mpv_geometry,
-                                    config.mpv_ontop,
-                                    cookie_path,
+                                    detail_state.detail.item.title.clone(),
                                 ) {
                                     state.command.message =
                                         Some(format!("Playback error: {} (is mpv installed?)", e));
@@ -328,6 +342,10 @@ fn handle_action(
             state.dispatch(action);
             spawn_feed_load(state, provider, tx, db);
         }
+        Action::Quit => {
+            state.stop_player_on_exit = false;
+            state.dispatch(action);
+        }
         Action::TogglePause => {
             let _ = player.toggle_pause();
             // Update player state immediately
@@ -350,24 +368,58 @@ fn handle_action(
                 let _ = player.set_volume((vol - 5.0).max(0.0));
             }
         }
+        Action::TogglePlaybackQuality => {
+            state.playback_quality = state.playback_quality.toggle();
+            let reloaded =
+                reload_current_playback(state, player, config, auth_state, tx).unwrap_or(false);
+            let suffix = if reloaded {
+                " (reloaded current media)"
+            } else {
+                ""
+            };
+            state.command.message = Some(format!(
+                "Playback quality: {}{}",
+                state.playback_quality.label(),
+                suffix
+            ));
+        }
+        Action::StopPlayer => {
+            stop_playback(player, state);
+            let _ = session::clear(&config.session_state_path());
+            state.command.message = Some("Stopped player".into());
+        }
+        Action::StopPlayerAndQuit => {
+            stop_playback(player, state);
+            let _ = session::clear(&config.session_state_path());
+            state.stop_player_on_exit = false;
+            state.should_quit = true;
+        }
         Action::PlayVideo(ref id) => {
-            if let Err(e) = player.play(
-                &format!("https://www.youtube.com/watch?v={}", id),
+            let url = format!("https://www.youtube.com/watch?v={}", id);
+            if let Err(e) = start_playback(
+                state,
+                player,
+                config,
+                auth_state,
+                tx,
+                &url,
                 PlayMode::Video,
-                &config.mpv_geometry,
-                config.mpv_ontop,
-                auth_state.cookie_path(),
+                "video".to_string(),
             ) {
                 state.command.message = Some(format!("Playback error: {} (is mpv installed?)", e));
             }
         }
         Action::PlayAudio(ref id) => {
-            if let Err(e) = player.play(
-                &format!("https://www.youtube.com/watch?v={}", id),
+            let url = format!("https://www.youtube.com/watch?v={}", id);
+            if let Err(e) = start_playback(
+                state,
+                player,
+                config,
+                auth_state,
+                tx,
+                &url,
                 PlayMode::AudioOnly,
-                &config.mpv_geometry,
-                config.mpv_ontop,
-                auth_state.cookie_path(),
+                "audio stream".to_string(),
             ) {
                 state.command.message = Some(format!("Playback error: {} (is mpv installed?)", e));
             }
@@ -392,6 +444,7 @@ fn handle_action(
                 let _ = db.set_cached_metadata(&detail.item.id, &json);
             }
             state.dispatch(action);
+            apply_pending_restore(state);
         }
         Action::ChannelDetailLoaded(_, ref detail) => {
             let is_subbed = db.is_subscribed(&detail.item.id).unwrap_or(false);
@@ -399,9 +452,11 @@ fn handle_action(
             if let Some(ref mut cd) = state.channel_detail {
                 cd.is_subscribed = is_subbed;
             }
+            apply_pending_restore(state);
         }
         Action::PlaylistDetailLoaded(_, _) => {
             state.dispatch(action);
+            apply_pending_restore(state);
         }
         Action::ThumbnailReady(ref key, ref path) => {
             // Load the downloaded image into the render cache
@@ -485,9 +540,258 @@ fn handle_action(
         }
         _ => {
             // All other actions go through normal dispatch
+            let needs_restore = matches!(
+                &action,
+                Action::FeedLoaded(_, _)
+                    | Action::SearchResults(_, _)
+                    | Action::PlayerStateUpdate(_)
+                    | Action::PlaybackLoadSlow(_)
+            );
             state.dispatch(action);
+            if needs_restore {
+                apply_pending_restore(state);
+            }
         }
     }
+}
+
+fn restore_saved_session(
+    saved: &PersistedSessionState,
+    state: &mut AppState,
+    player: &mut MpvPlayer,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+    db: &Database,
+) {
+    state.tabs.active = saved.active_tab;
+    state.view = saved.view.clone();
+    state.previous_views = saved.previous_views.clone();
+    state.search.query = saved.search_query.clone();
+    state.search.cursor = state.search.query.len();
+    state.search.focused = false;
+    state.playback_quality = saved.playback_quality;
+    state.pending_restore = Some(saved.pending_restore());
+
+    if let Some(detached) = saved.detached_player.clone() {
+        if player.attach_if_running() {
+            state.current_playback = Some(detached.session);
+            state.dispatch(Action::PlayerStateUpdate(poll_socket_state(
+                player.socket_path(),
+            )));
+        }
+    }
+
+    match &saved.view {
+        View::Home => spawn_feed_load(state, provider, tx, db),
+        View::Search => {
+            if saved.search_query.is_empty() {
+                state.view = View::Home;
+                spawn_feed_load(state, provider, tx, db);
+            } else {
+                spawn_search_load(state, &saved.search_query, provider, tx);
+            }
+        }
+        View::VideoDetail(video_id) => {
+            spawn_detail_load_by_id(state, video_id, provider, tx, db);
+        }
+        View::ChannelDetail(channel_id) => {
+            spawn_channel_load(state, channel_id, provider, tx);
+        }
+        View::PlaylistDetail(playlist_id) => {
+            spawn_playlist_load(state, playlist_id, provider, tx);
+        }
+    }
+}
+
+fn persist_session(state: &AppState, config: &Config) -> anyhow::Result<()> {
+    let mut persisted = PersistedSessionState::capture_from(state);
+    if state.stop_player_on_exit {
+        persisted.detached_player = None;
+    }
+    session::save(&config.session_state_path(), &persisted)
+}
+
+fn apply_pending_restore(state: &mut AppState) {
+    let Some(restore) = state.pending_restore.clone() else {
+        return;
+    };
+
+    let restored = match &restore.view {
+        View::Home if matches!(state.view, View::Home) => {
+            if state.tabs.active == Tab::Subscriptions {
+                let max = state.subscription_channels.len().saturating_sub(1);
+                state.cards.selected_row = restore.cards_selected_row.min(max);
+                state.cards.selected_col = 0;
+            } else {
+                let total = state.cards.items.len();
+                if total == 0 {
+                    state.cards.selected_row = 0;
+                    state.cards.selected_col = 0;
+                } else {
+                    let cols = state.cards.columns.max(1);
+                    let max_row = (total - 1) / cols;
+                    state.cards.selected_row = restore.cards_selected_row.min(max_row);
+                    let index = state.cards.selected_row * cols;
+                    let row_len = (total - index).min(cols);
+                    state.cards.selected_col =
+                        restore.cards_selected_col.min(row_len.saturating_sub(1));
+                }
+            }
+            true
+        }
+        View::Search if matches!(state.view, View::Search) => {
+            let max = state.video_list.items.len().saturating_sub(1);
+            state.video_list.selected = restore.video_list_selected.min(max);
+            true
+        }
+        View::VideoDetail(id) => match &state.view {
+            View::VideoDetail(current_id) if current_id == id => {
+                if let Some(detail) = state.detail.as_mut() {
+                    detail.selected_action = restore.detail_selected_action.unwrap_or(0).min(2);
+                }
+                true
+            }
+            _ => false,
+        },
+        View::ChannelDetail(id) => match &state.view {
+            View::ChannelDetail(current_id) if current_id == id => {
+                if let Some(detail) = state.channel_detail.as_mut() {
+                    detail.selected_action = restore.channel_selected_action.unwrap_or(0).min(1);
+                    let max_video = detail.detail.videos.len().saturating_sub(1);
+                    detail.selected_video =
+                        restore.channel_selected_video.unwrap_or(0).min(max_video);
+                }
+                true
+            }
+            _ => false,
+        },
+        View::PlaylistDetail(id) => match &state.view {
+            View::PlaylistDetail(current_id) if current_id == id => {
+                if let Some(detail) = state.playlist_detail.as_mut() {
+                    detail.selected_action = restore.playlist_selected_action.unwrap_or(0).min(2);
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+
+    if restored {
+        state.pending_restore = None;
+    }
+}
+
+fn stop_playback(player: &mut MpvPlayer, state: &mut AppState) {
+    player.stop();
+    state.playback_loading = None;
+    state.current_playback = None;
+    state.player_state = player::PlayerState::Stopped;
+}
+
+fn spawn_search_load(
+    state: &mut AppState,
+    query: &str,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+) {
+    let tx = tx.clone();
+    let provider = Arc::clone(provider);
+    let req_id = state.loading.search_request_id;
+    let query = query.to_string();
+    tokio::spawn(async move {
+        match provider.search(&query, None).await {
+            Ok(page) => {
+                let _ = tx.send(Action::SearchResults(req_id, page));
+            }
+            Err(e) => {
+                let _ = tx.send(Action::ShowError(format!("Search error: {}", e)));
+            }
+        }
+    });
+}
+
+fn start_playback(
+    state: &mut AppState,
+    player: &mut MpvPlayer,
+    config: &Config,
+    auth_state: &AuthState,
+    tx: &ActionSender,
+    url: &str,
+    mode: PlayMode,
+    label: String,
+) -> anyhow::Result<()> {
+    player.play(
+        url,
+        mode,
+        state.playback_quality,
+        config,
+        auth_state.cookie_path(),
+    )?;
+    state.loading.playback_request_id += 1;
+    let request_id = state.loading.playback_request_id;
+    state.playback_loading = Some(PlaybackLoadState {
+        request_id,
+        label,
+        started_at: std::time::Instant::now(),
+        slow: false,
+    });
+    state.current_playback = Some(PlaybackSession {
+        url: url.to_string(),
+        mode,
+    });
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let _ = tx.send(Action::PlaybackLoadSlow(request_id));
+    });
+    Ok(())
+}
+
+fn reload_current_playback(
+    state: &mut AppState,
+    player: &mut MpvPlayer,
+    config: &Config,
+    auth_state: &AuthState,
+    tx: &ActionSender,
+) -> anyhow::Result<bool> {
+    let Some(session) = state.current_playback.clone() else {
+        return Ok(false);
+    };
+
+    let (resume_at, restore_paused) = match &state.player_state {
+        player::PlayerState::Playing(info) => (Some(info.time_pos), false),
+        player::PlayerState::Paused(info) => (Some(info.time_pos), true),
+        player::PlayerState::Stopped => return Ok(false),
+    };
+    let label = match &state.player_state {
+        player::PlayerState::Playing(info) | player::PlayerState::Paused(info)
+            if !info.title.is_empty() =>
+        {
+            info.title.clone()
+        }
+        _ => "current media".to_string(),
+    };
+
+    start_playback(
+        state,
+        player,
+        config,
+        auth_state,
+        tx,
+        &session.url,
+        session.mode,
+        label,
+    )?;
+
+    if let Some(seconds) = resume_at.filter(|seconds| *seconds > 0.0) {
+        let _ = player.seek_to(seconds);
+    }
+    if restore_paused {
+        let _ = player.toggle_pause();
+    }
+
+    Ok(true)
 }
 
 fn spawn_feed_load(
@@ -600,6 +904,39 @@ fn spawn_detail_load(
                 if detail.item.thumbnail_url.is_empty() {
                     detail.item.thumbnail_url = fallback.thumbnail_url.clone();
                 }
+                let _ = tx.send(Action::DetailLoaded(req_id, detail));
+            }
+            Err(e) => {
+                let _ = tx.send(Action::ShowError(format!("Detail error: {}", e)));
+            }
+        }
+    });
+}
+
+fn spawn_detail_load_by_id(
+    state: &mut AppState,
+    video_id: &str,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+    db: &Database,
+) {
+    state.loading.detail_request_id += 1;
+    state.loading.detail_loading = true;
+    let req_id = state.loading.detail_request_id;
+
+    if let Ok(Some(json)) = db.get_cached_metadata(video_id) {
+        if let Ok(detail) = serde_json::from_str::<models::VideoDetail>(&json) {
+            let _ = tx.send(Action::DetailLoaded(req_id, detail));
+            return;
+        }
+    }
+
+    let tx = tx.clone();
+    let provider = Arc::clone(provider);
+    let id = video_id.to_string();
+    tokio::spawn(async move {
+        match provider.video_detail(&id).await {
+            Ok(detail) => {
                 let _ = tx.send(Action::DetailLoaded(req_id, detail));
             }
             Err(e) => {
@@ -810,9 +1147,23 @@ fn record_history(db: &Database, detail: &models::VideoDetail) {
     );
 }
 
-fn execute_command(cmd: &str, state: &mut AppState, config: &Config, auth_state: &mut AuthState) {
+fn execute_command(
+    cmd: &str,
+    state: &mut AppState,
+    player: &mut MpvPlayer,
+    config: &Config,
+    auth_state: &mut AuthState,
+) {
     if cmd == "q" || cmd == "quit" {
+        state.stop_player_on_exit = false;
         state.should_quit = true;
+        return;
+    }
+
+    if cmd == "stop-player" {
+        stop_playback(player, state);
+        let _ = session::clear(&config.session_state_path());
+        state.command.message = Some("Stopped player".into());
         return;
     }
 
@@ -849,7 +1200,7 @@ fn execute_command(cmd: &str, state: &mut AppState, config: &Config, auth_state:
 
 fn spawn_player_poll_task(socket_path: std::path::PathBuf, tx: ActionSender) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
         let mut last_state = player::PlayerState::Stopped;
 
         loop {

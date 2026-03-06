@@ -72,7 +72,7 @@ authenticated subscription feed.
 
 | Key                        | Action                    |
 | -------------------------- | ------------------------- |
-| `q` / `Ctrl+c`            | Quit                      |
+| `q` / `Ctrl+c`            | Quit or detach player     |
 | `/` or `s`                 | Focus search              |
 | `1` / `2` / `3`           | Switch tab (For You / Subscriptions / History) |
 | `h` `j` `k` `l` / arrows  | Navigate                  |
@@ -81,14 +81,47 @@ authenticated subscription feed.
 | `Space`                    | Toggle pause              |
 | `<` / `>`                  | Seek -10s / +10s          |
 | `+` / `=` / `-`            | Volume up / down          |
+| `Q`                        | Toggle 720p / 1080p       |
+| `X`                        | Stop player and quit      |
 | `:`                        | Command mode              |
 
 ### Commands
 
 | Command                    | Description               |
 | -------------------------- | ------------------------- |
-| `:q`                       | Quit                      |
+| `:q`                       | Quit or detach player     |
+| `:stop-player`             | Stop detached player      |
 | `:import-cookies <path>`   | Import browser cookies    |
+
+## Playback Tuning
+
+Long YouTube videos use explicit `mpv` buffering defaults now. If you want to
+override them, create `~/.config/youtube-terminal/config.toml` and set any of:
+
+```toml
+mpv_cache_secs = 45
+mpv_cache_pause_wait = 1.5
+mpv_hwdec = "auto-safe"
+mpv_force_seekable = true
+mpv_demuxer_max_bytes = "128MiB"
+mpv_demuxer_max_back_bytes = "64MiB"
+default_playback_quality = "1080p"
+```
+
+Use `Q` in the app to flip between the built-in 720p and 1080p presets. If a
+machine still struggles with long podcasts, set `default_playback_quality` to
+`"720p"` so playback starts lower by default. The app also writes an `mpv` log
+to `~/.config/youtube-terminal/cache/logs/mpv.log` for playback debugging.
+
+## Detached Playback
+
+When a video is playing, quitting the TUI detaches from `mpv` instead of
+stopping playback. This is intended for popup workflows like `tmux popup`: pick
+something, press `q`, and the video keeps running after the popup closes.
+
+On the next launch, youtube-terminal restores the previous terminal view and
+tries to reconnect to the still-running player session automatically. Use `X`
+or `:stop-player` when you want to stop the detached player explicitly.
 
 ## License
 
