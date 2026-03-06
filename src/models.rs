@@ -51,6 +51,7 @@ pub struct PlaylistItem {
     pub id: String,
     pub title: String,
     pub channel: String,
+    pub channel_id: String,
     pub video_count: Option<u32>,
     pub thumbnail_url: String,
 }
@@ -77,12 +78,19 @@ pub enum ItemType {
 }
 
 /// Channel detail view
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelDetail {
     pub item: ChannelItem,
     pub description: String,
     pub video_count: Option<u64>,
+}
+
+/// Playlist detail view
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistDetail {
+    pub item: PlaylistItem,
+    pub description: String,
+    pub videos: Vec<VideoItem>,
 }
 
 impl FeedItem {

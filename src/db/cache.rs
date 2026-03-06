@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use super::Database;
 
-#[allow(dead_code)]
 impl Database {
     pub fn get_cached_metadata(&self, video_id: &str) -> Result<Option<String>> {
         let result = self.conn.query_row(

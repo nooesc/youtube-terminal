@@ -44,8 +44,9 @@ cargo run --release
 
 ## Cookie setup
 
-To access personalized feeds (home feed, subscriptions), you need to export
-your YouTube cookies from your browser.
+To access the cookie-backed subscription feed, you need to export your YouTube
+cookies from your browser. The `For You` tab is still trending-based; a real
+personalized home feed is not implemented yet.
 
 ### Export cookies from Firefox
 
@@ -64,7 +65,8 @@ import-cookies ~/cookies.txt
 ```
 
 The cookies are copied to the application data directory with restricted
-permissions (0600).
+permissions (0600). If the import succeeds, the Subscriptions tab can use your
+authenticated subscription feed.
 
 ## Key bindings
 

@@ -2,9 +2,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct Config {
-    pub cookie_file: Option<PathBuf>,
     pub mpv_geometry: String,
     pub mpv_ontop: bool,
     pub data_dir: PathBuf,
@@ -20,7 +18,6 @@ impl Default for Config {
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
             .join("youtube-terminal");
         Self {
-            cookie_file: None,
             mpv_geometry: "400x225+0+0".to_string(),
             mpv_ontop: true,
             data_dir,

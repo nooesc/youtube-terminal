@@ -5,6 +5,91 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::time::Duration;
+
+fn send_command_on_stream(stream: &mut UnixStream, cmd: &[Value]) -> Result<Option<Value>> {
+    let msg = json!({"command": cmd});
+    let mut line = serde_json::to_string(&msg)?;
+    line.push('\n');
+    stream.write_all(line.as_bytes())?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut response_line = String::new();
+    reader.read_line(&mut response_line)?;
+
+    let resp: Value = serde_json::from_str(&response_line)?;
+    if resp.get("error").and_then(|e| e.as_str()) == Some("success") {
+        Ok(resp.get("data").cloned())
+    } else {
+        let err = resp
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or("unknown error");
+        bail!("mpv command error: {}", err)
+    }
+}
+
+pub fn poll_socket_state(socket_path: &Path) -> PlayerState {
+    if !socket_path.exists() {
+        return PlayerState::Stopped;
+    }
+
+    let mut stream = match UnixStream::connect(socket_path) {
+        Ok(stream) => stream,
+        Err(_) => return PlayerState::Stopped,
+    };
+
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .is_err()
+    {
+        return PlayerState::Stopped;
+    }
+
+    let paused = send_command_on_stream(&mut stream, &[json!("get_property"), json!("pause")])
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let time_pos = send_command_on_stream(&mut stream, &[json!("get_property"), json!("time-pos")])
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let duration = send_command_on_stream(&mut stream, &[json!("get_property"), json!("duration")])
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let title = send_command_on_stream(&mut stream, &[json!("get_property"), json!("media-title")])
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(ToString::to_string))
+        .unwrap_or_default();
+
+    let volume = send_command_on_stream(&mut stream, &[json!("get_property"), json!("volume")])
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(100.0);
+
+    let info = PlayerInfo {
+        title,
+        time_pos,
+        duration,
+        volume,
+    };
+
+    if paused {
+        PlayerState::Paused(info)
+    } else {
+        PlayerState::Playing(info)
+    }
+}
 
 pub struct MpvPlayer {
     socket_path: PathBuf,
@@ -70,9 +155,7 @@ impl MpvPlayer {
             .spawn()
             .context("failed to spawn mpv — is it installed?")?;
         self.process = Some(child);
-
-        // Wait for mpv to create the socket and connect
-        self.connect_with_retry()?;
+        self.stream = None;
 
         Ok(())
     }
@@ -82,7 +165,7 @@ impl MpvPlayer {
             if self.socket_path.exists() {
                 match UnixStream::connect(&self.socket_path) {
                     Ok(stream) => {
-                        stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+                        stream.set_read_timeout(Some(Duration::from_millis(250)))?;
                         self.stream = Some(stream);
                         return Ok(());
                     }
@@ -90,35 +173,22 @@ impl MpvPlayer {
                     Err(e) => return Err(e.into()),
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(50));
         }
         bail!("timed out waiting for mpv socket")
     }
 
-    pub fn send_command(&mut self, cmd: &[Value]) -> Result<Option<Value>> {
-        let stream = self.stream.as_mut().context("mpv not connected")?;
-
-        let msg = json!({"command": cmd});
-        let mut line = serde_json::to_string(&msg)?;
-        line.push('\n');
-        stream.write_all(line.as_bytes())?;
-        stream.flush()?;
-
-        // Read response
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line)?;
-
-        let resp: Value = serde_json::from_str(&response_line)?;
-        if resp.get("error").and_then(|e| e.as_str()) == Some("success") {
-            Ok(resp.get("data").cloned())
-        } else {
-            let err = resp
-                .get("error")
-                .and_then(|e| e.as_str())
-                .unwrap_or("unknown error");
-            bail!("mpv command error: {}", err)
+    fn ensure_connected(&mut self) -> Result<()> {
+        if self.stream.is_none() {
+            self.connect_with_retry()?;
         }
+        Ok(())
+    }
+
+    pub fn send_command(&mut self, cmd: &[Value]) -> Result<Option<Value>> {
+        self.ensure_connected()?;
+        let stream = self.stream.as_mut().context("mpv not connected")?;
+        send_command_on_stream(stream, cmd)
     }
 
     pub fn get_property(&mut self, name: &str) -> Result<Value> {
@@ -243,7 +313,7 @@ impl MpvPlayer {
     }
 
     pub fn is_running(&self) -> bool {
-        self.stream.is_some()
+        self.process.is_some()
     }
 }
 

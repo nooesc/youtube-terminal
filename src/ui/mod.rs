@@ -1,5 +1,7 @@
 pub mod card_grid;
+pub mod channel_detail;
 pub mod now_playing;
+pub mod playlist_detail;
 pub mod search_bar;
 pub mod tab_bar;
 pub mod video_detail;
@@ -44,10 +46,10 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thu
             video_detail::render(f, state, area);
         }
         crate::app::View::ChannelDetail(id) => {
-            let text = format!("Channel: {}", id);
-            let content =
-                Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Channel"));
-            f.render_widget(content, area);
+            channel_detail::render(f, state, area, id);
+        }
+        crate::app::View::PlaylistDetail(_) => {
+            playlist_detail::render(f, state, area);
         }
     }
 }

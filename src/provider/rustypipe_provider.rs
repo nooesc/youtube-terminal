@@ -1,4 +1,4 @@
-use super::{AuthCapabilities, ContentProvider};
+use super::ContentProvider;
 use crate::models;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -15,7 +15,6 @@ use std::time::Duration;
 /// YouTube data provider backed by the RustyPipe library.
 pub struct RustyPipeProvider {
     client: RustyPipe,
-    authenticated: bool,
 }
 
 impl RustyPipeProvider {
@@ -26,24 +25,20 @@ impl RustyPipeProvider {
             .storage_dir(storage_dir)
             .build()
             .context("failed to create RustyPipe client")?;
-        Ok(Self {
-            client,
-            authenticated: false,
-        })
+        Ok(Self { client })
     }
 
-    /// Import cookies from Netscape cookie-jar text format.
-    pub async fn set_cookies(&self, cookie_content: &str) -> Result<()> {
+    /// Import cookies from Netscape cookie-jar text format and validate the session.
+    pub async fn authenticate_with_cookies(&self, cookie_content: &str) -> Result<()> {
         self.client
             .user_auth_set_cookie_txt(cookie_content)
             .await
             .context("failed to set cookies")?;
+        self.client
+            .user_auth_check_cookie()
+            .await
+            .context("failed to validate authenticated YouTube session")?;
         Ok(())
-    }
-
-    /// Mark this provider as authenticated (or not).
-    pub fn set_authenticated(&mut self, auth: bool) {
-        self.authenticated = auth;
     }
 }
 
@@ -104,6 +99,11 @@ fn map_playlist_item(rp: &RpPlaylistItem) -> models::PlaylistItem {
             .as_ref()
             .map(|c| c.name.clone())
             .unwrap_or_default(),
+        channel_id: rp
+            .channel
+            .as_ref()
+            .map(|c| c.id.clone())
+            .unwrap_or_default(),
         video_count: rp.video_count.map(|n| n as u32),
         thumbnail_url: best_thumbnail_url(&rp.thumbnail),
     }
@@ -129,14 +129,6 @@ fn map_youtube_item(item: &YouTubeItem) -> models::FeedItem {
 
 #[async_trait]
 impl ContentProvider for RustyPipeProvider {
-    fn capabilities(&self) -> AuthCapabilities {
-        AuthCapabilities {
-            has_home_feed: self.authenticated,
-            has_subscriptions: self.authenticated,
-            has_history: self.authenticated,
-        }
-    }
-
     async fn search(
         &self,
         query: &str,
@@ -238,34 +230,37 @@ impl ContentProvider for RustyPipeProvider {
         })
     }
 
-    async fn channel_videos(
-        &self,
-        id: &str,
-        continuation: Option<&str>,
-    ) -> Result<models::FeedPage<models::VideoItem>> {
-        if let Some(ctoken) = continuation {
-            let page = self
-                .client
-                .query()
-                .continuation::<RpVideoItem, _>(ctoken, ContinuationEndpoint::Browse, None)
-                .await
-                .context("channel_videos continuation failed")?;
-            Ok(models::FeedPage {
-                items: page.items.iter().map(map_video_item).collect(),
-                continuation: page.ctoken,
-            })
-        } else {
-            let channel = self
-                .client
-                .query()
-                .channel_videos(id)
-                .await
-                .context("channel_videos failed")?;
-            Ok(models::FeedPage {
-                items: channel.content.items.iter().map(map_video_item).collect(),
-                continuation: channel.content.ctoken,
-            })
-        }
+    async fn playlist(&self, id: &str) -> Result<models::PlaylistDetail> {
+        let playlist = self
+            .client
+            .query()
+            .playlist(id)
+            .await
+            .context("playlist failed")?;
+
+        Ok(models::PlaylistDetail {
+            item: models::PlaylistItem {
+                id: playlist.id.clone(),
+                title: playlist.name.clone(),
+                channel: playlist
+                    .channel
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default(),
+                channel_id: playlist
+                    .channel
+                    .as_ref()
+                    .map(|c| c.id.clone())
+                    .unwrap_or_default(),
+                video_count: Some(playlist.video_count as u32),
+                thumbnail_url: best_thumbnail_url(&playlist.thumbnail),
+            },
+            description: playlist
+                .description
+                .map(|t| t.to_plaintext())
+                .unwrap_or_default(),
+            videos: playlist.videos.items.iter().map(map_video_item).collect(),
+        })
     }
 
     async fn home_feed(
@@ -282,23 +277,6 @@ impl ContentProvider for RustyPipeProvider {
                 .map(models::FeedItem::Video)
                 .collect(),
             continuation: None,
-        })
-    }
-
-    async fn subscriptions(
-        &self,
-        _continuation: Option<&str>,
-    ) -> Result<models::FeedPage<models::ChannelItem>> {
-        // RustyPipeQuery::subscriptions() already calls .authenticated() internally
-        let page = self
-            .client
-            .query()
-            .subscriptions()
-            .await
-            .context("subscriptions failed")?;
-        Ok(models::FeedPage {
-            items: page.items.iter().map(map_channel_item).collect(),
-            continuation: page.ctoken,
         })
     }
 

@@ -586,7 +586,7 @@ git commit -m "feat: add search results list with live YouTube search"
 **Step 1: Write detail renderer**
 
 - Show: title, channel, view count, upload date, description (scrollable)
-- Action menu: Play Video, Play Audio Only, Open Channel, Download
+- Action menu: Play Video, Play Audio Only, Open Channel
 - j/k navigates action menu, Enter executes selected action
 
 **Step 2: Wire detail loading**
@@ -624,9 +624,9 @@ git commit -m "feat: add video detail view with action menu"
 
 **Step 2: Spawn mpv polling task**
 
-Background task that polls mpv IPC every 1 second:
-- `player.poll_state()`
-- Send `PlayerStateUpdate(info)` via channel
+Background task that polls mpv IPC every 250ms using the socket path:
+- query mpv state over JSON IPC
+- send `PlayerStateUpdate(info)` via channel when state changes
 
 **Step 3: Verify it works**
 
@@ -710,7 +710,7 @@ git commit -m "feat: add responsive card grid widget"
 
 ---
 
-### Task 18: Load trending/home feed into card grid
+### Task 18: Load trending feed into card grid
 
 **Files:**
 - Modify: `src/app.rs`
@@ -719,8 +719,8 @@ git commit -m "feat: add responsive card grid widget"
 **Step 1: Load initial feed on startup**
 
 On app start:
-- If authenticated: attempt `provider.home_feed(None)` (may fall back to trending)
-- If not authenticated: `provider.trending()`
+- Call `provider.home_feed(None)` for the `For You` tab
+- Current shipped behavior falls back to trending content
 - Send `FeedLoaded(request_id, result)` via channel
 
 **Step 2: Handle FeedLoaded for home tab**
@@ -729,7 +729,7 @@ Store items in `CardGridState`, clear loading state.
 
 **Step 3: Handle tab switching**
 
-- Tab 1 (For You): load home feed or trending
+- Tab 1 (For You): load `provider.home_feed(None)` (currently trending-backed)
 - Tab 2 (Subscriptions): load `subscription_feed()` if authenticated, else show message
 - Tab 3 (History): load from local SQLite
 
@@ -742,7 +742,7 @@ Expected: app starts, shows loading, then trending videos appear as cards. Can s
 
 ```bash
 git add src/app.rs src/event.rs
-git commit -m "feat: load trending/home feed into card grid"
+git commit -m "feat: load trending feed into card grid"
 ```
 
 ---

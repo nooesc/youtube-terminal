@@ -9,6 +9,7 @@ pub enum View {
     Search,
     VideoDetail(String),
     ChannelDetail(String),
+    PlaylistDetail(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,6 +57,8 @@ pub enum Action {
     AppendFeed(u64, Box<LoadedPage>),
     AppendSearch(u64, FeedPage<FeedItem>),
     DetailLoaded(u64, VideoDetail),
+    ChannelDetailLoaded(u64, ChannelDetail),
+    PlaylistDetailLoaded(u64, PlaylistDetail),
     ThumbnailReady(ThumbnailKey, PathBuf),
     ThumbnailFailed(ThumbnailKey),
     PlayerStateUpdate(MpvPlayerState),
@@ -119,6 +122,15 @@ pub struct DetailState {
     pub selected_action: usize,
 }
 
+pub struct ChannelDetailState {
+    pub detail: ChannelDetail,
+}
+
+pub struct PlaylistDetailState {
+    pub detail: PlaylistDetail,
+    pub selected_action: usize,
+}
+
 pub struct LoadingState {
     pub feed_loading: bool,
     pub feed_request_id: u64,
@@ -140,6 +152,8 @@ pub struct AppState {
     pub cards: CardGridState,
     pub video_list: VideoListState,
     pub detail: Option<DetailState>,
+    pub channel_detail: Option<ChannelDetailState>,
+    pub playlist_detail: Option<PlaylistDetailState>,
     pub player_state: MpvPlayerState,
     pub loading: LoadingState,
     pub should_quit: bool,
@@ -176,6 +190,8 @@ impl AppState {
                 continuation: None,
             },
             detail: None,
+            channel_detail: None,
+            playlist_detail: None,
             player_state: MpvPlayerState::Stopped,
             loading: LoadingState {
                 feed_loading: false,
@@ -211,6 +227,7 @@ impl AppState {
                 View::Home => self.navigate_cards(dir),
                 View::Search => self.navigate_list(dir),
                 View::VideoDetail(_) => self.navigate_detail(dir),
+                View::PlaylistDetail(_) => self.navigate_playlist_detail(dir),
                 View::ChannelDetail(_) => {}
             },
             Action::Select => {
@@ -374,6 +391,27 @@ impl AppState {
                     self.view = View::VideoDetail(video_id);
                 }
             }
+            Action::ChannelDetailLoaded(req_id, detail) => {
+                if req_id == self.loading.detail_request_id {
+                    self.loading.detail_loading = false;
+                    let channel_id = detail.item.id.clone();
+                    self.channel_detail = Some(ChannelDetailState { detail });
+                    self.previous_views.push(self.view.clone());
+                    self.view = View::ChannelDetail(channel_id);
+                }
+            }
+            Action::PlaylistDetailLoaded(req_id, detail) => {
+                if req_id == self.loading.detail_request_id {
+                    self.loading.detail_loading = false;
+                    let playlist_id = detail.item.id.clone();
+                    self.playlist_detail = Some(PlaylistDetailState {
+                        detail,
+                        selected_action: 0,
+                    });
+                    self.previous_views.push(self.view.clone());
+                    self.view = View::PlaylistDetail(playlist_id);
+                }
+            }
             Action::ThumbnailReady(key, _path) => {
                 self.loading.thumbnail_loading.remove(&key);
             }
@@ -475,6 +513,23 @@ impl AppState {
         }
     }
 
+    fn navigate_playlist_detail(&mut self, dir: Direction) {
+        if let Some(ref mut detail) = self.playlist_detail {
+            let max_actions = 3; // Play Playlist, Play Audio, Open Channel
+            match dir {
+                Direction::Up => {
+                    detail.selected_action = detail.selected_action.saturating_sub(1);
+                }
+                Direction::Down => {
+                    if detail.selected_action < max_actions - 1 {
+                        detail.selected_action += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn handle_select(&mut self) {
         match self.view {
             View::Search => {
@@ -488,6 +543,7 @@ impl AppState {
                 // Execute selected action (play video, play audio, etc.)
                 // Handled by event loop
             }
+            View::PlaylistDetail(_) => {}
             View::ChannelDetail(_) => {}
         }
     }

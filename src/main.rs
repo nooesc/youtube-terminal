@@ -14,8 +14,8 @@ use auth::AuthState;
 use config::Config;
 use db::Database;
 use event::{create_action_channel, poll_event, ActionSender};
-use models::{FeedItem, ItemType};
-use player::mpv::MpvPlayer;
+use models::{FeedItem, ItemType, VideoItem};
+use player::mpv::{poll_socket_state, MpvPlayer};
 use player::PlayMode;
 use provider::rustypipe_provider::RustyPipeProvider;
 use provider::ContentProvider;
@@ -28,6 +28,8 @@ use crossterm::{
 use ratatui::prelude::*;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::runtime::Handle;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,16 +46,22 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Init database
     let db = Database::open(&config.db_path())?;
+    for path in db.cleanup_old_thumbnails(30, 1000).unwrap_or_default() {
+        let _ = std::fs::remove_file(path);
+    }
 
     // 3. Init auth state
     let mut auth_state = AuthState::load(&config);
 
     // 4. Init provider
-    let mut provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
+    let provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
     if let AuthState::Authenticated { cookie_path } = &auth_state {
         if let Ok(content) = std::fs::read_to_string(cookie_path) {
-            let _ = provider.set_cookies(&content).await;
-            provider.set_authenticated(true);
+            if provider.authenticate_with_cookies(&content).await.is_err() {
+                auth_state = AuthState::NoAuth;
+            }
+        } else {
+            auth_state = AuthState::NoAuth;
         }
     }
     let provider = Arc::new(provider);
@@ -67,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 7. Create action channels
     let (tx, mut rx) = create_action_channel();
+    spawn_player_poll_task(player.socket_path().to_path_buf(), tx.clone());
 
     // 8. Setup terminal
     enable_raw_mode()?;
@@ -103,15 +112,6 @@ async fn main() -> anyhow::Result<()> {
                 &tx,
                 &mut thumb_cache,
             );
-        }
-
-        // Poll player state
-        if player.is_running() {
-            if let Ok(ps) = player.poll_state() {
-                if ps != state.player_state {
-                    state.dispatch(Action::PlayerStateUpdate(ps));
-                }
-            }
         }
 
         // Drain async actions from channel
@@ -176,19 +176,19 @@ fn handle_action(
         Action::SubmitCommand(ref cmd) => {
             let cmd = cmd.trim().to_string();
             state.dispatch(action);
-            execute_command(&cmd, state, config, auth_state, provider);
+            execute_command(&cmd, state, config, auth_state, provider, tx, db);
         }
         Action::Select => {
             // Determine what to load based on current view
             match &state.view {
                 View::Search => {
                     if let Some(item) = state.selected_list_item().cloned() {
-                        handle_item_select(&item, state, provider, tx);
+                        handle_item_select(&item, state, provider, tx, db);
                     }
                 }
                 View::Home => {
                     if let Some(item) = state.selected_card_item().cloned() {
-                        handle_item_select(&item, state, provider, tx);
+                        handle_item_select(&item, state, provider, tx, db);
                     }
                 }
                 View::VideoDetail(_) => {
@@ -230,8 +230,52 @@ fn handle_action(
                                 // Open Channel -- navigate to channel detail
                                 let channel_id = detail_state.detail.item.channel_id.clone();
                                 if !channel_id.is_empty() {
-                                    state.previous_views.push(state.view.clone());
-                                    state.view = View::ChannelDetail(channel_id);
+                                    spawn_channel_load(state, &channel_id, provider, tx);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                View::PlaylistDetail(_) => {
+                    if let Some(detail_state) = &state.playlist_detail {
+                        let playlist_id = detail_state.detail.item.id.clone();
+                        let cookie_path = auth_state.cookie_path();
+                        match detail_state.selected_action {
+                            0 => {
+                                if let Err(e) = player.play(
+                                    &format!(
+                                        "https://www.youtube.com/playlist?list={}",
+                                        playlist_id
+                                    ),
+                                    PlayMode::Video,
+                                    &config.mpv_geometry,
+                                    config.mpv_ontop,
+                                    cookie_path,
+                                ) {
+                                    state.command.message =
+                                        Some(format!("Playback error: {} (is mpv installed?)", e));
+                                }
+                            }
+                            1 => {
+                                if let Err(e) = player.play(
+                                    &format!(
+                                        "https://www.youtube.com/playlist?list={}",
+                                        playlist_id
+                                    ),
+                                    PlayMode::AudioOnly,
+                                    &config.mpv_geometry,
+                                    config.mpv_ontop,
+                                    cookie_path,
+                                ) {
+                                    state.command.message =
+                                        Some(format!("Playback error: {} (is mpv installed?)", e));
+                                }
+                            }
+                            2 => {
+                                let channel_id = detail_state.detail.item.channel_id.clone();
+                                if !channel_id.is_empty() {
+                                    spawn_channel_load(state, &channel_id, provider, tx);
                                 }
                             }
                             _ => {}
@@ -292,22 +336,40 @@ fn handle_action(
         }
         Action::Navigate(dir) => {
             state.dispatch(action);
+            spawn_thumbnail_downloads(state, tx, config, thumb_cache, db);
             if matches!(dir, Direction::Down) {
                 check_load_more(state, provider, tx);
             }
         }
         Action::FeedLoaded(_, _) | Action::SearchResults(_, _) => {
             state.dispatch(action);
-            spawn_thumbnail_downloads(state, tx, config, thumb_cache);
+            spawn_thumbnail_downloads(state, tx, config, thumb_cache, db);
         }
         Action::AppendFeed(_, _) | Action::AppendSearch(_, _) => {
             state.dispatch(action);
-            spawn_thumbnail_downloads(state, tx, config, thumb_cache);
+            spawn_thumbnail_downloads(state, tx, config, thumb_cache, db);
+        }
+        Action::DetailLoaded(_, ref detail) => {
+            if let Ok(json) = serde_json::to_string(detail) {
+                let _ = db.set_cached_metadata(&detail.item.id, &json);
+            }
+            state.dispatch(action);
+        }
+        Action::ChannelDetailLoaded(_, _) | Action::PlaylistDetailLoaded(_, _) => {
+            state.dispatch(action);
         }
         Action::ThumbnailReady(ref key, ref path) => {
             // Load the downloaded image into the render cache
             // Use card grid thumbnail dimensions: width=24 (CARD_WIDTH-2), height=4 (THUMB_HEIGHT)
-            let _ = thumb_cache.load(key, path, 24, 4);
+            if thumb_cache.load(key, path, 24, 4).is_ok() {
+                let _ = db.set_thumbnail_path(key, path);
+                state.dispatch(action);
+            } else {
+                let _ = std::fs::remove_file(path);
+                state.dispatch(Action::ThumbnailFailed(key.clone()));
+            }
+        }
+        Action::ThumbnailFailed(_) => {
             state.dispatch(action);
         }
         _ => {
@@ -344,8 +406,8 @@ fn spawn_feed_load(
 
     tokio::spawn(async move {
         let result = match tab {
-            Tab::ForYou => match provider.trending().await {
-                Ok(page) => Some(LoadedPage::Trending(page)),
+            Tab::ForYou => match provider.home_feed(None).await {
+                Ok(page) => Some(LoadedPage::Home(page)),
                 Err(e) => {
                     let _ = tx.send(Action::ShowError(format!("Feed error: {}", e)));
                     None
@@ -369,7 +431,46 @@ fn spawn_feed_load(
 
 fn spawn_detail_load(
     state: &mut AppState,
-    video_id: &str,
+    video: &VideoItem,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+    db: &Database,
+) {
+    state.loading.detail_request_id += 1;
+    state.loading.detail_loading = true;
+    let req_id = state.loading.detail_request_id;
+
+    if let Ok(Some(json)) = db.get_cached_metadata(&video.id) {
+        if let Ok(detail) = serde_json::from_str::<models::VideoDetail>(&json) {
+            let _ = tx.send(Action::DetailLoaded(req_id, detail));
+            return;
+        }
+    }
+    let tx = tx.clone();
+    let provider = Arc::clone(provider);
+    let fallback = video.clone();
+
+    tokio::spawn(async move {
+        match provider.video_detail(&fallback.id).await {
+            Ok(mut detail) => {
+                if detail.item.duration.is_none() {
+                    detail.item.duration = fallback.duration;
+                }
+                if detail.item.thumbnail_url.is_empty() {
+                    detail.item.thumbnail_url = fallback.thumbnail_url.clone();
+                }
+                let _ = tx.send(Action::DetailLoaded(req_id, detail));
+            }
+            Err(e) => {
+                let _ = tx.send(Action::ShowError(format!("Detail error: {}", e)));
+            }
+        }
+    });
+}
+
+fn spawn_channel_load(
+    state: &mut AppState,
+    channel_id: &str,
     provider: &Arc<RustyPipeProvider>,
     tx: &ActionSender,
 ) {
@@ -378,15 +479,40 @@ fn spawn_detail_load(
     let req_id = state.loading.detail_request_id;
     let tx = tx.clone();
     let provider = Arc::clone(provider);
-    let id = video_id.to_string();
+    let id = channel_id.to_string();
 
     tokio::spawn(async move {
-        match provider.video_detail(&id).await {
+        match provider.channel(&id).await {
             Ok(detail) => {
-                let _ = tx.send(Action::DetailLoaded(req_id, detail));
+                let _ = tx.send(Action::ChannelDetailLoaded(req_id, detail));
             }
             Err(e) => {
-                let _ = tx.send(Action::ShowError(format!("Detail error: {}", e)));
+                let _ = tx.send(Action::ShowError(format!("Channel error: {}", e)));
+            }
+        }
+    });
+}
+
+fn spawn_playlist_load(
+    state: &mut AppState,
+    playlist_id: &str,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+) {
+    state.loading.detail_request_id += 1;
+    state.loading.detail_loading = true;
+    let req_id = state.loading.detail_request_id;
+    let tx = tx.clone();
+    let provider = Arc::clone(provider);
+    let id = playlist_id.to_string();
+
+    tokio::spawn(async move {
+        match provider.playlist(&id).await {
+            Ok(detail) => {
+                let _ = tx.send(Action::PlaylistDetailLoaded(req_id, detail));
+            }
+            Err(e) => {
+                let _ = tx.send(Action::ShowError(format!("Playlist error: {}", e)));
             }
         }
     });
@@ -485,17 +611,17 @@ fn handle_item_select(
     state: &mut AppState,
     provider: &Arc<RustyPipeProvider>,
     tx: &ActionSender,
+    db: &Database,
 ) {
     match item {
         FeedItem::Video(v) | FeedItem::Short(v) => {
-            spawn_detail_load(state, &v.id, provider, tx);
+            spawn_detail_load(state, v, provider, tx, db);
         }
         FeedItem::Channel(c) => {
-            state.previous_views.push(state.view.clone());
-            state.view = View::ChannelDetail(c.id.clone());
+            spawn_channel_load(state, &c.id, provider, tx);
         }
-        FeedItem::Playlist(_) => {
-            state.command.message = Some("Playlist view not yet implemented".into());
+        FeedItem::Playlist(p) => {
+            spawn_playlist_load(state, &p.id, provider, tx);
         }
     }
 }
@@ -505,15 +631,32 @@ fn spawn_thumbnail_downloads(
     tx: &ActionSender,
     config: &Config,
     thumb_cache: &ThumbnailCache,
+    db: &Database,
 ) {
-    let items = match &state.view {
-        View::Home => &state.cards.items,
-        View::Search => &state.video_list.items,
+    let item_indexes: Vec<usize> = match &state.view {
+        View::Home => {
+            let cols = state.cards.columns.max(1);
+            let start_row = state.cards.selected_row.saturating_sub(1);
+            let end_row = state.cards.selected_row + 3;
+            let start = start_row * cols;
+            let end = (end_row * cols).min(state.cards.items.len());
+            (start..end).collect()
+        }
+        View::Search => {
+            let start = state.video_list.selected.saturating_sub(5);
+            let end = (state.video_list.selected + 15).min(state.video_list.items.len());
+            (start..end).collect()
+        }
         _ => return,
     };
 
     let cache_dir = config.thumbnail_dir();
-    for item in items.iter() {
+    for item_idx in item_indexes {
+        let item = match &state.view {
+            View::Home => &state.cards.items[item_idx],
+            View::Search => &state.video_list.items[item_idx],
+            _ => return,
+        };
         let key = item.thumbnail_key();
         if state.loading.thumbnail_loading.contains(&key) || thumb_cache.get(&key).is_some() {
             continue;
@@ -521,6 +664,13 @@ fn spawn_thumbnail_downloads(
         let url = item.thumbnail_url().to_string();
         if url.is_empty() {
             continue;
+        }
+
+        if let Ok(Some(existing_path)) = db.get_thumbnail_path(&key) {
+            if existing_path.exists() {
+                let _ = tx.send(Action::ThumbnailReady(key.clone(), existing_path));
+                continue;
+            }
         }
 
         // Check if file already exists on disk
@@ -573,6 +723,8 @@ fn execute_command(
     config: &Config,
     auth_state: &mut AuthState,
     provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+    db: &Database,
 ) {
     if cmd == "q" || cmd == "quit" {
         state.should_quit = true;
@@ -603,15 +755,28 @@ fn execute_command(
                 }
                 // Reload cookies into the provider
                 if let Ok(content) = std::fs::read_to_string(&dest) {
-                    let provider = Arc::clone(provider);
-                    tokio::spawn(async move {
-                        let _ = provider.set_cookies(&content).await;
-                        // Note: set_authenticated requires &mut, handled via auth_state below
+                    let provider_for_auth = Arc::clone(provider);
+                    let auth_result = tokio::task::block_in_place(|| {
+                        Handle::current().block_on(async move {
+                            provider_for_auth.authenticate_with_cookies(&content).await
+                        })
                     });
+
+                    match auth_result {
+                        Ok(()) => {
+                            *auth_state = AuthState::Authenticated { cookie_path: dest };
+                            state.command.message = Some("Cookies imported successfully".into());
+                            spawn_feed_load(state, provider, tx, db);
+                        }
+                        Err(e) => {
+                            *auth_state = AuthState::NoAuth;
+                            state.command.message =
+                                Some(format!("Error validating cookies: {}", e));
+                        }
+                    }
+                } else {
+                    state.command.message = Some("Error: failed to read imported cookies".into());
                 }
-                // Update auth state
-                *auth_state = AuthState::load(config);
-                state.command.message = Some("Cookies imported successfully".into());
             }
             Err(e) => {
                 state.command.message = Some(format!("Error: {}", e));
@@ -621,4 +786,28 @@ fn execute_command(
     }
 
     state.command.message = Some(format!("Unknown command: {}", cmd));
+}
+
+fn spawn_player_poll_task(socket_path: std::path::PathBuf, tx: ActionSender) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        let mut last_state = player::PlayerState::Stopped;
+
+        loop {
+            interval.tick().await;
+            let path = socket_path.clone();
+            let polled = tokio::task::spawn_blocking(move || poll_socket_state(&path)).await;
+            let state = match polled {
+                Ok(state) => state,
+                Err(_) => player::PlayerState::Stopped,
+            };
+
+            if state != last_state {
+                last_state = state.clone();
+                if tx.send(Action::PlayerStateUpdate(state)).is_err() {
+                    break;
+                }
+            }
+        }
+    });
 }

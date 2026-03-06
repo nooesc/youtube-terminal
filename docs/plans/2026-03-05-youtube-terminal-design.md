@@ -136,7 +136,6 @@ When a video is selected from any list or card grid:
 │  ▸ Play Video (mpv window)                              │
 │    Play Audio Only                                      │
 │    Open Channel                                         │
-│    Download (yt-dlp)                                    │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │ ▶ Now Playing: Title — Channel      ├──────┤ 2:30/4:15 │
@@ -292,13 +291,16 @@ pub struct AuthCapabilities {
 
 ### "For You" / Home Feed
 
-RustyPipe 0.11.4 does **not** have a first-class home feed API in its userdata module. The available authenticated endpoints are: `history`, `subscriptions`, `subscription_feed`, `saved_playlists`, `liked_videos`, `watch_later`.
+Current shipped behavior: the `For You` tab uses trending content. RustyPipe
+0.11.4 does **not** expose a first-class personalized home feed API in its
+userdata module, and this app does not currently implement a raw InnerTube
+`FEwhat_to_watch` client.
 
-For the "For You" tab, the implementation strategy is:
+Future work, if we choose to take it on:
 
-1. **With auth:** Attempt a raw InnerTube `browse` request with `browseId: "FEwhat_to_watch"` using RustyPipe's authenticated client. This is the internal YouTube homepage endpoint. If RustyPipe doesn't expose this directly, we'll need to make a custom HTTP request with the auth cookies and parse the InnerTube response ourselves.
-2. **Without auth:** Fall back to `RustyPipeQuery::trending()` which works unauthenticated.
-3. **Risk:** The raw InnerTube approach may be fragile. If it proves too brittle, the "For You" tab becomes "Trending" permanently, which is an acceptable degradation.
+1. Attempt a raw InnerTube `browse` request with `browseId: "FEwhat_to_watch"` using authenticated cookies.
+2. Parse that response into the app's `FeedItem` model.
+3. Keep Trending as the fallback if the raw endpoint is too brittle.
 
 ## State Management
 
