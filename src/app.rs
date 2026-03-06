@@ -235,7 +235,13 @@ impl AppState {
                 // Caller should trigger feed load for the new tab
             }
             Action::Navigate(dir) => match self.view {
-                View::Home => self.navigate_cards(dir),
+                View::Home => {
+                    if self.tabs.active == Tab::Subscriptions {
+                        self.navigate_subscription_list(dir);
+                    } else {
+                        self.navigate_cards(dir);
+                    }
+                }
                 View::Search => self.navigate_list(dir),
                 View::VideoDetail(_) => self.navigate_detail(dir),
                 View::PlaylistDetail(_) => self.navigate_playlist_detail(dir),
@@ -494,6 +500,24 @@ impl AppState {
                         self.cards.selected_col.min(items_in_row.saturating_sub(1));
                 }
             }
+        }
+    }
+
+    fn navigate_subscription_list(&mut self, dir: Direction) {
+        let total = self.subscription_channels.len();
+        if total == 0 {
+            return;
+        }
+        match dir {
+            Direction::Up => {
+                self.cards.selected_row = self.cards.selected_row.saturating_sub(1);
+            }
+            Direction::Down => {
+                if self.cards.selected_row < total - 1 {
+                    self.cards.selected_row += 1;
+                }
+            }
+            _ => {}
         }
     }
 

@@ -3,6 +3,7 @@ pub mod channel_detail;
 pub mod now_playing;
 pub mod playlist_detail;
 pub mod search_bar;
+pub mod subscription_list;
 pub mod tab_bar;
 pub mod video_detail;
 pub mod video_list;
@@ -40,7 +41,11 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thu
             video_list::render(f, state, area);
         }
         crate::app::View::Home => {
-            card_grid::render(f, state, area, thumb_cache);
+            if state.tabs.active == crate::app::Tab::Subscriptions {
+                subscription_list::render(f, state, area);
+            } else {
+                card_grid::render(f, state, area, thumb_cache);
+            }
         }
         crate::app::View::VideoDetail(_) => {
             video_detail::render(f, state, area);

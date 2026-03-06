@@ -180,7 +180,16 @@ fn handle_action(
                     }
                 }
                 View::Home => {
-                    if let Some(item) = state.selected_card_item().cloned() {
+                    if state.tabs.active == Tab::Subscriptions {
+                        // Select from subscription channel list
+                        let channel_id = state
+                            .subscription_channels
+                            .get(state.cards.selected_row)
+                            .map(|c| c.id.clone());
+                        if let Some(id) = channel_id {
+                            spawn_channel_load(state, &id, provider, tx);
+                        }
+                    } else if let Some(item) = state.selected_card_item().cloned() {
                         handle_item_select(&item, state, provider, tx, db);
                     }
                 }
@@ -501,6 +510,17 @@ fn spawn_feed_load(
         return;
     }
 
+    // Subscriptions tab: load from local SQLite DB
+    if state.tabs.active == Tab::Subscriptions {
+        let channels = db.get_subscriptions().unwrap_or_default();
+        let page = LoadedPage::Subscriptions(models::FeedPage {
+            items: channels,
+            continuation: None,
+        });
+        let _ = tx.send(Action::FeedLoaded(req_id, Box::new(page)));
+        return;
+    }
+
     let tx = tx.clone();
     let provider = Arc::clone(provider);
     let tab = state.tabs.active;
@@ -514,14 +534,9 @@ fn spawn_feed_load(
                     None
                 }
             },
-            Tab::Subscriptions => match provider.subscription_feed(None).await {
-                Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
-                Err(e) => {
-                    let _ = tx.send(Action::ShowError(format!("Subscriptions error: {}", e)));
-                    None
-                }
-            },
-            Tab::History => unreachable!("History tab handled synchronously above"),
+            Tab::Subscriptions | Tab::History => {
+                unreachable!("Handled synchronously above")
+            }
         };
 
         if let Some(page) = result {
@@ -622,6 +637,10 @@ fn spawn_playlist_load(
 fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: &ActionSender) {
     match &state.view {
         View::Home => {
+            // Subscriptions and History tabs are loaded locally without pagination
+            if matches!(state.tabs.active, Tab::Subscriptions | Tab::History) {
+                return;
+            }
             if state.loading.feed_loading || state.loading.loading_more_feed {
                 return;
             }
@@ -635,34 +654,17 @@ fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: 
                     let req_id = state.loading.feed_request_id;
                     let tx = tx.clone();
                     let provider = Arc::clone(provider);
-                    let tab = state.tabs.active;
 
                     tokio::spawn(async move {
-                        let result = match tab {
-                            Tab::Subscriptions => {
-                                match provider.subscription_feed(Some(&ctoken)).await {
-                                    Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
-                                    Err(e) => {
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Feed continuation error: {}",
-                                            e
-                                        )));
-                                        None
-                                    }
-                                }
+                        let result = match provider.home_feed(Some(&ctoken)).await {
+                            Ok(page) => Some(LoadedPage::Home(page)),
+                            Err(e) => {
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Feed continuation error: {}",
+                                    e
+                                )));
+                                None
                             }
-                            // Trending is not paginated; ForYou uses home_feed
-                            Tab::ForYou => match provider.home_feed(Some(&ctoken)).await {
-                                Ok(page) => Some(LoadedPage::Home(page)),
-                                Err(e) => {
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Feed continuation error: {}",
-                                        e
-                                    )));
-                                    None
-                                }
-                            },
-                            Tab::History => None,
                         };
 
                         if let Some(page) = result {

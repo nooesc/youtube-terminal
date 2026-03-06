@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 /// Abstraction over YouTube data fetching, allowing different backends.
 #[async_trait]
+#[allow(dead_code)]
 pub trait ContentProvider: Send + Sync {
     // -- Unauthenticated endpoints --
 
