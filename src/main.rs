@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     let provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
     if let AuthState::Authenticated { cookie_path } = &auth_state {
         if let Ok(content) = std::fs::read_to_string(cookie_path) {
-            if provider.authenticate_with_cookies(&content).await.is_err() {
+            if provider.set_cookies(&content).await.is_err() {
                 auth_state = AuthState::NoAuth;
             }
         } else {
@@ -748,30 +748,39 @@ fn execute_command(
 
         match auth::cookies::import_cookie_file(source, &dest) {
             Ok(()) => {
-                // Validate the imported cookies before reporting success
-                if !auth::cookies::validate_cookies(&dest) {
-                    state.command.message = Some("Error: imported cookies are invalid".into());
-                    return;
-                }
-                // Reload cookies into the provider
+                // Load cookies into the provider
                 if let Ok(content) = std::fs::read_to_string(&dest) {
-                    let provider_for_auth = Arc::clone(provider);
-                    let auth_result = tokio::task::block_in_place(|| {
+                    let provider_for_set = Arc::clone(provider);
+                    let provider_for_check = Arc::clone(provider);
+                    let set_result = tokio::task::block_in_place(|| {
                         Handle::current().block_on(async move {
-                            provider_for_auth.authenticate_with_cookies(&content).await
+                            provider_for_set.set_cookies(&content).await
                         })
                     });
 
-                    match auth_result {
+                    match set_result {
                         Ok(()) => {
-                            *auth_state = AuthState::Authenticated { cookie_path: dest };
-                            state.command.message = Some("Cookies imported successfully".into());
+                            *auth_state =
+                                AuthState::Authenticated { cookie_path: dest };
+                            // Try session validation — warn but don't block
+                            let check_ok = tokio::task::block_in_place(|| {
+                                Handle::current().block_on(async move {
+                                    provider_for_check.check_cookie().await
+                                })
+                            });
+                            if check_ok.is_ok() {
+                                state.command.message =
+                                    Some("Cookies imported and session verified".into());
+                            } else {
+                                state.command.message = Some(
+                                    "Cookies imported (session check failed — subscriptions may not work)".into(),
+                                );
+                            }
                             spawn_feed_load(state, provider, tx, db);
                         }
                         Err(e) => {
-                            *auth_state = AuthState::NoAuth;
                             state.command.message =
-                                Some(format!("Error validating cookies: {}", e));
+                                Some(format!("Error loading cookies: {}", e));
                         }
                     }
                 } else {

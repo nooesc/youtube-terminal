@@ -28,12 +28,17 @@ impl RustyPipeProvider {
         Ok(Self { client })
     }
 
-    /// Import cookies from Netscape cookie-jar text format and validate the session.
-    pub async fn authenticate_with_cookies(&self, cookie_content: &str) -> Result<()> {
+    /// Import cookies from Netscape cookie-jar text format.
+    pub async fn set_cookies(&self, cookie_content: &str) -> Result<()> {
         self.client
             .user_auth_set_cookie_txt(cookie_content)
             .await
             .context("failed to set cookies")?;
+        Ok(())
+    }
+
+    /// Check if the loaded cookies represent a valid YouTube session.
+    pub async fn check_cookie(&self) -> Result<()> {
         self.client
             .user_auth_check_cookie()
             .await
