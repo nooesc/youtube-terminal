@@ -1,3 +1,4 @@
+pub mod card_grid;
 pub mod now_playing;
 pub mod search_bar;
 pub mod tab_bar;
@@ -31,17 +32,7 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
             video_list::render(f, state, area);
         }
         crate::app::View::Home => {
-            // Placeholder for card grid (Task 17)
-            let text = if state.loading.feed_loading {
-                "Loading...".to_string()
-            } else if state.cards.items.is_empty() {
-                "No content. Press / to search.".to_string()
-            } else {
-                format!("{} items loaded", state.cards.items.len())
-            };
-            let content = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Content"));
-            f.render_widget(content, area);
+            card_grid::render(f, state, area);
         }
         crate::app::View::VideoDetail(_) => {
             video_detail::render(f, state, area);

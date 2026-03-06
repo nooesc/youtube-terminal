@@ -77,6 +77,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 10. Main loop
     loop {
+        // Update grid columns based on current terminal width
+        state.update_columns(terminal.size()?.width);
+
         // Render
         terminal.draw(|f| ui::render(f, &state))?;
 
