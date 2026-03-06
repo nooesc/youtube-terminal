@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::models::FeedItem;
+use crate::thumbnails::ThumbnailCache;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -7,7 +8,7 @@ const CARD_WIDTH: u16 = 26;
 const CARD_HEIGHT: u16 = 10;
 const THUMB_HEIGHT: u16 = 4;
 
-pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
+pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
     if state.loading.feed_loading && state.cards.items.is_empty() {
         let loading = Paragraph::new("Loading...")
             .style(Style::default().fg(Color::Yellow))
@@ -70,12 +71,12 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
             let is_selected =
                 actual_row == state.cards.selected_row && col == state.cards.selected_col;
 
-            render_card(f, &state.cards.items[item_idx], card_area, is_selected);
+            render_card(f, &state.cards.items[item_idx], card_area, is_selected, thumb_cache);
         }
     }
 }
 
-fn render_card(f: &mut Frame, item: &FeedItem, area: Rect, selected: bool) {
+fn render_card(f: &mut Frame, item: &FeedItem, area: Rect, selected: bool, thumb_cache: &ThumbnailCache) {
     let border_style = if selected {
         Style::default().fg(Color::Yellow)
     } else {
@@ -96,7 +97,7 @@ fn render_card(f: &mut Frame, item: &FeedItem, area: Rect, selected: bool) {
     let (title, channel, meta) = format_card_item(item);
     let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(3));
     let thumb_area = Rect::new(inner.x, inner.y, inner.width, thumb_h);
-    render_thumb_placeholder(f, item, thumb_area);
+    render_thumbnail(f, item, thumb_area, thumb_cache);
 
     // Title (below thumbnail)
     let text_y = inner.y + thumb_area.height;
@@ -134,6 +135,17 @@ fn render_card(f: &mut Frame, item: &FeedItem, area: Rect, selected: bool) {
             Paragraph::new(Line::from(meta_span)),
             Rect::new(inner.x, text_y + 2, text_width, 1),
         );
+    }
+}
+
+fn render_thumbnail(f: &mut Frame, item: &FeedItem, area: Rect, thumb_cache: &ThumbnailCache) {
+    let key = item.thumbnail_key();
+    if let Some(img) = thumb_cache.get(&key) {
+        // Render actual thumbnail using half-block characters
+        ThumbnailCache::render_halfblock(img, area, f.buffer_mut());
+    } else {
+        // Fallback: colored placeholder
+        render_thumb_placeholder(f, item, area);
     }
 }
 

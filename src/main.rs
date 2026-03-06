@@ -6,6 +6,7 @@ mod event;
 mod models;
 mod player;
 mod provider;
+mod thumbnails;
 mod ui;
 
 use app::{Action, AppState, LoadedPage, Tab, View};
@@ -18,6 +19,7 @@ use player::mpv::MpvPlayer;
 use player::PlayMode;
 use provider::rustypipe_provider::RustyPipeProvider;
 use provider::ContentProvider;
+use thumbnails::ThumbnailCache;
 
 use crossterm::{
     execute,
@@ -61,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 6. Init app state
     let mut state = AppState::new();
+    let mut thumb_cache = ThumbnailCache::new();
 
     // 7. Create action channels
     let (tx, mut rx) = create_action_channel();
@@ -81,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         state.update_columns(terminal.size()?.width);
 
         // Render
-        terminal.draw(|f| ui::render(f, &state))?;
+        terminal.draw(|f| ui::render(f, &state, &thumb_cache))?;
 
         // Poll crossterm events
         if let Some(action) = poll_event(&state) {
@@ -94,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
                 &auth_state,
                 &provider,
                 &tx,
+                &mut thumb_cache,
             );
         }
 
@@ -108,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
                 &auth_state,
                 &provider,
                 &tx,
+                &mut thumb_cache,
             );
         }
 
@@ -133,6 +138,7 @@ fn handle_action(
     auth_state: &AuthState,
     provider: &Arc<RustyPipeProvider>,
     tx: &ActionSender,
+    thumb_cache: &mut ThumbnailCache,
 ) {
     match action {
         Action::SubmitSearch(ref query) => {
@@ -258,6 +264,16 @@ fn handle_action(
                 auth_state.cookie_path(),
             );
         }
+        Action::FeedLoaded(_, _) | Action::SearchResults(_, _) => {
+            state.dispatch(action);
+            spawn_thumbnail_downloads(state, tx, config);
+        }
+        Action::ThumbnailReady(ref key, ref path) => {
+            // Load the downloaded image into the render cache
+            // Use card grid thumbnail dimensions: width=24 (CARD_WIDTH-2), height=4 (THUMB_HEIGHT)
+            let _ = thumb_cache.load(key, path, 24, 4);
+            state.dispatch(action);
+        }
         _ => {
             // All other actions go through normal dispatch
             state.dispatch(action);
@@ -331,6 +347,41 @@ fn get_video_id(item: &FeedItem) -> Option<String> {
     match item {
         FeedItem::Video(v) | FeedItem::Short(v) => Some(v.id.clone()),
         _ => None,
+    }
+}
+
+fn spawn_thumbnail_downloads(state: &mut AppState, tx: &ActionSender, config: &Config) {
+    let items = match &state.view {
+        View::Home => &state.cards.items,
+        View::Search => &state.video_list.items,
+        _ => return,
+    };
+
+    let cache_dir = config.thumbnail_dir();
+    for item in items.iter().take(12) {
+        let key = item.thumbnail_key();
+        if state.loading.thumbnail_loading.contains(&key) {
+            continue;
+        }
+        let url = item.thumbnail_url().to_string();
+        if url.is_empty() {
+            continue;
+        }
+
+        state.loading.thumbnail_loading.insert(key.clone());
+        let tx = tx.clone();
+        let key_clone = key.clone();
+        let cache_dir = cache_dir.clone();
+        tokio::spawn(async move {
+            match thumbnails::download_thumbnail(&url, &key_clone, &cache_dir).await {
+                Ok(path) => {
+                    let _ = tx.send(Action::ThumbnailReady(key_clone, path));
+                }
+                Err(_) => {
+                    // Silently ignore thumbnail download failures
+                }
+            }
+        });
     }
 }
 
