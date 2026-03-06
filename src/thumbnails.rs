@@ -55,8 +55,12 @@ impl ThumbnailCache {
     /// `width` is the number of terminal columns, `height` is the number of terminal rows.
     /// Each terminal row renders two pixel rows via half-block characters, so the image
     /// is resized to (width, height * 2).
+    /// Uses `load_from_memory` instead of `image::open` because YouTube returns
+    /// WebP content even when the URL ends in `.jpg` — `image::open` guesses
+    /// format from the file extension and fails on these files.
     pub fn load(&mut self, key: &ThumbnailKey, path: &Path, width: u32, height: u32) -> Result<()> {
-        let img = image::open(path).context("failed to open thumbnail")?;
+        let data = std::fs::read(path).context("failed to read thumbnail file")?;
+        let img = image::load_from_memory(&data).context("failed to decode thumbnail")?;
         let resized = img.resize_exact(width, height * 2, image::imageops::FilterType::Triangle);
         self.cache.insert(key.clone(), resized);
         Ok(())
