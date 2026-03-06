@@ -6,8 +6,9 @@ mod event;
 mod models;
 mod player;
 mod provider;
+mod ui;
 
-use app::{AppState, Tab, View};
+use app::AppState;
 use auth::AuthState;
 use config::Config;
 use db::Database;
@@ -20,7 +21,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
 use std::io;
 
 #[tokio::main]
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
     // 9. Main loop
     loop {
         // Render
-        terminal.draw(|f| render_placeholder(f, &state))?;
+        terminal.draw(|f| ui::render(f, &state))?;
 
         // Poll crossterm events
         if let Some(action) = poll_event(&state) {
@@ -92,32 +92,4 @@ async fn main() -> anyhow::Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     Ok(())
-}
-
-fn render_placeholder(f: &mut Frame, state: &AppState) {
-    let area = f.area();
-
-    let tab_name = match state.tabs.active {
-        Tab::ForYou => "For You",
-        Tab::Subscriptions => "Subscriptions",
-        Tab::History => "History",
-    };
-
-    let view_name = match &state.view {
-        View::Home => "Home".to_string(),
-        View::Search => format!("Search: {}", state.search.query),
-        View::VideoDetail(id) => format!("Video: {}", id),
-        View::ChannelDetail(id) => format!("Channel: {}", id),
-    };
-
-    let text = format!(
-        "youtube-terminal v0.1.0\n\nTab: {} | View: {}\n\n\
-        Keys: q=quit, /=search, 1/2/3=tabs, hjkl=navigate, Enter=select, Esc=back\n\
-        Playback: Space=pause, </>=seek, +/-=volume",
-        tab_name, view_name
-    );
-
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("youtube-terminal"));
-    f.render_widget(paragraph, area);
 }
