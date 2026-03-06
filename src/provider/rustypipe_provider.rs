@@ -265,7 +265,11 @@ impl ContentProvider for RustyPipeProvider {
         // so we fall back to trending wrapped as FeedItem::Video.
         let page = self.trending().await?;
         Ok(models::FeedPage {
-            items: page.items.into_iter().map(models::FeedItem::Video).collect(),
+            items: page
+                .items
+                .into_iter()
+                .map(models::FeedItem::Video)
+                .collect(),
             continuation: None,
         })
     }

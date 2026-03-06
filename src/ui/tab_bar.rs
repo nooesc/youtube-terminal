@@ -13,7 +13,11 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
     let tabs = Tabs::new(titles)
         .select(selected)
         .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
         .divider("|");
 
     f.render_widget(tabs, area);

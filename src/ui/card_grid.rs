@@ -32,7 +32,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thumbna
     // Calculate grid dimensions
     let cols = ((inner.width + 1) / (CARD_WIDTH + 1)).max(1) as usize;
     let total = state.cards.items.len();
-    let rows_count = (total + cols - 1) / cols;
+    let rows_count = total.div_ceil(cols);
 
     // Calculate visible rows based on available height
     let visible_rows = (inner.height / CARD_HEIGHT) as usize;
@@ -71,12 +71,24 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thumbna
             let is_selected =
                 actual_row == state.cards.selected_row && col == state.cards.selected_col;
 
-            render_card(f, &state.cards.items[item_idx], card_area, is_selected, thumb_cache);
+            render_card(
+                f,
+                &state.cards.items[item_idx],
+                card_area,
+                is_selected,
+                thumb_cache,
+            );
         }
     }
 }
 
-fn render_card(f: &mut Frame, item: &FeedItem, area: Rect, selected: bool, thumb_cache: &ThumbnailCache) {
+fn render_card(
+    f: &mut Frame,
+    item: &FeedItem,
+    area: Rect,
+    selected: bool,
+    thumb_cache: &ThumbnailCache,
+) {
     let border_style = if selected {
         Style::default().fg(Color::Yellow)
     } else {
@@ -191,10 +203,7 @@ fn format_card_item(item: &FeedItem) -> (String, String, String) {
             (v.title.clone(), v.channel.clone(), views)
         }
         FeedItem::Channel(c) => {
-            let subs = c
-                .subscriber_count
-                .map(|n| format_count(n))
-                .unwrap_or_default();
+            let subs = c.subscriber_count.map(format_count).unwrap_or_default();
             (c.name.clone(), "Channel".into(), format!("{} subs", subs))
         }
         FeedItem::Playlist(p) => {
@@ -230,8 +239,9 @@ fn truncate_str(s: &str, max: usize) -> String {
 }
 
 fn simple_hash(s: &str) -> usize {
-    s.bytes()
-        .fold(0usize, |acc, b| acc.wrapping_mul(31).wrapping_add(b as usize))
+    s.bytes().fold(0usize, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(b as usize)
+    })
 }
 
 #[cfg(test)]

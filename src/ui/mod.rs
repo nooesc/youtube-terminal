@@ -14,8 +14,8 @@ pub fn render(f: &mut Frame, state: &AppState, thumb_cache: &ThumbnailCache) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // search bar
-            Constraint::Length(1),  // tab bar
+            Constraint::Length(3), // search bar
+            Constraint::Length(1), // tab bar
             Constraint::Min(3),    // main content
             Constraint::Length(3), // now-playing bar / command bar
         ])
@@ -45,8 +45,8 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thu
         }
         crate::app::View::ChannelDetail(id) => {
             let text = format!("Channel: {}", id);
-            let content = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title("Channel"));
+            let content =
+                Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Channel"));
             f.render_widget(content, area);
         }
     }
@@ -65,16 +65,13 @@ fn render_command_bar(f: &mut Frame, state: &AppState, area: Rect) {
         // Show the command input with ":" prefix
         let text = format!(":{}", state.command.input);
         let cursor_x = inner.x + text.len() as u16;
-        let paragraph = Paragraph::new(text)
-            .style(Style::default().fg(Color::White));
+        let paragraph = Paragraph::new(text).style(Style::default().fg(Color::White));
         f.render_widget(paragraph, inner);
         // Show cursor
         f.set_cursor_position((cursor_x.min(inner.right() - 1), inner.y));
     } else if let Some(msg) = &state.command.message {
         // Show status message
-        let paragraph = Paragraph::new(msg.as_str())
-            .style(Style::default().fg(Color::Yellow));
+        let paragraph = Paragraph::new(msg.as_str()).style(Style::default().fg(Color::Yellow));
         f.render_widget(paragraph, inner);
     }
 }
-

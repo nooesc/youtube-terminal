@@ -12,6 +12,7 @@ pub struct MpvPlayer {
     stream: Option<UnixStream>,
 }
 
+#[allow(dead_code)]
 impl MpvPlayer {
     pub fn new() -> Self {
         let pid = std::process::id();
@@ -57,10 +58,7 @@ impl MpvPlayer {
 
         if let Some(cookie) = cookie_path {
             if cookie.exists() {
-                cmd.arg(format!(
-                    "--ytdl-raw-options=cookies={}",
-                    cookie.display()
-                ));
+                cmd.arg(format!("--ytdl-raw-options=cookies={}", cookie.display()));
             }
         }
 
@@ -84,8 +82,7 @@ impl MpvPlayer {
             if self.socket_path.exists() {
                 match UnixStream::connect(&self.socket_path) {
                     Ok(stream) => {
-                        stream
-                            .set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+                        stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
                         self.stream = Some(stream);
                         return Ok(());
                     }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::Database;
 
+#[allow(dead_code)]
 impl Database {
     pub fn get_cached_metadata(&self, video_id: &str) -> Result<Option<String>> {
         let result = self.conn.query_row(
@@ -97,17 +98,15 @@ impl Database {
         )?;
 
         // Also trim if over max count
-        let count: u32 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM thumbnail_index", [], |row| {
-                row.get(0)
-            })?;
+        let count: u32 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM thumbnail_index", [], |row| row.get(0))?;
 
         let mut excess_paths = Vec::new();
         if count > max_count {
-            let mut stmt = self.conn.prepare(
-                "SELECT file_path FROM thumbnail_index ORDER BY cached_at ASC LIMIT ?1",
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT file_path FROM thumbnail_index ORDER BY cached_at ASC LIMIT ?1")?;
             excess_paths = stmt
                 .query_map(params![count - max_count], |row| {
                     let path: String = row.get(0)?;

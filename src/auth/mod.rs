@@ -9,10 +9,15 @@ pub enum AuthState {
     Authenticated { cookie_path: PathBuf },
 }
 
+#[allow(dead_code)]
 impl AuthState {
     pub fn load(config: &Config) -> Self {
         let path = config.cookie_path();
-        if path.exists() && std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+        if path.exists()
+            && std::fs::metadata(&path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        {
             AuthState::Authenticated { cookie_path: path }
         } else {
             AuthState::NoAuth

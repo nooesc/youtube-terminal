@@ -55,13 +55,7 @@ impl ThumbnailCache {
     /// `width` is the number of terminal columns, `height` is the number of terminal rows.
     /// Each terminal row renders two pixel rows via half-block characters, so the image
     /// is resized to (width, height * 2).
-    pub fn load(
-        &mut self,
-        key: &ThumbnailKey,
-        path: &Path,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
+    pub fn load(&mut self, key: &ThumbnailKey, path: &Path, width: u32, height: u32) -> Result<()> {
         let img = image::open(path).context("failed to open thumbnail")?;
         let resized = img.resize_exact(width, height * 2, image::imageops::FilterType::Triangle);
         self.cache.insert(key.clone(), resized);

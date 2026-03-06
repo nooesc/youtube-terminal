@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::Database;
 
+#[allow(dead_code)]
 impl Database {
     pub fn add_to_history(
         &self,

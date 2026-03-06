@@ -5,6 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 /// Describes what authenticated features are available.
+#[allow(dead_code)]
 pub struct AuthCapabilities {
     pub has_home_feed: bool,
     pub has_subscriptions: bool,
@@ -13,6 +14,7 @@ pub struct AuthCapabilities {
 
 /// Abstraction over YouTube data fetching, allowing different backends.
 #[async_trait]
+#[allow(dead_code)]
 pub trait ContentProvider: Send + Sync {
     /// Returns which authenticated features are currently available.
     fn capabilities(&self) -> AuthCapabilities;
@@ -47,6 +49,5 @@ pub trait ContentProvider: Send + Sync {
     async fn subscriptions(&self, continuation: Option<&str>) -> Result<FeedPage<ChannelItem>>;
 
     /// Get the user's subscription video feed.
-    async fn subscription_feed(&self, continuation: Option<&str>)
-        -> Result<FeedPage<VideoItem>>;
+    async fn subscription_feed(&self, continuation: Option<&str>) -> Result<FeedPage<VideoItem>>;
 }

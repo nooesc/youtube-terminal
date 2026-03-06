@@ -27,6 +27,7 @@ pub enum Direction {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Action {
     // Navigation
     SwitchTab(Tab),
@@ -73,6 +74,7 @@ pub enum Action {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum LoadedPage {
     Home(FeedPage<FeedItem>),
     Subscriptions(FeedPage<ChannelItem>),
@@ -147,7 +149,9 @@ impl AppState {
         Self {
             view: View::Home,
             previous_views: Vec::new(),
-            tabs: TabState { active: Tab::ForYou },
+            tabs: TabState {
+                active: Tab::ForYou,
+            },
             search: SearchState {
                 query: String::new(),
                 cursor: 0,
@@ -341,11 +345,9 @@ impl AppState {
                             self.cards.continuation = feed.continuation;
                         }
                         LoadedPage::History(feed) => {
-                            self.cards.items.extend(
-                                feed.items
-                                    .into_iter()
-                                    .map(|e| FeedItem::Video(e.video)),
-                            );
+                            self.cards
+                                .items
+                                .extend(feed.items.into_iter().map(|e| FeedItem::Video(e.video)));
                             self.cards.continuation = feed.continuation;
                         }
                         LoadedPage::Subscriptions(_) => {}
@@ -398,7 +400,7 @@ impl AppState {
             return;
         }
         let cols = self.cards.columns.max(1);
-        let rows = (total + cols - 1) / cols;
+        let rows = total.div_ceil(cols);
 
         match dir {
             Direction::Left => {

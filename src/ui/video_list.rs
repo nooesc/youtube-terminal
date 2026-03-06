@@ -7,7 +7,11 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
     if state.loading.search_loading {
         let loading = Paragraph::new("Searching...")
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Search Results"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Search Results"),
+            );
         f.render_widget(loading, area);
         return;
     }
@@ -15,7 +19,11 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
     if state.video_list.items.is_empty() {
         let empty = Paragraph::new("No results. Press / to search.")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Search Results"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Search Results"),
+            );
         f.render_widget(empty, area);
         return;
     }
@@ -70,10 +78,7 @@ fn format_feed_item(item: &FeedItem) -> (String, String, String) {
             (v.title.clone(), v.channel.clone(), meta)
         }
         FeedItem::Channel(c) => {
-            let subs = c
-                .subscriber_count
-                .map(|n| format_count(n))
-                .unwrap_or_default();
+            let subs = c.subscriber_count.map(format_count).unwrap_or_default();
             (c.name.clone(), "Channel".into(), format!("{} subs", subs))
         }
         FeedItem::Playlist(p) => {
@@ -87,7 +92,7 @@ fn format_feed_item(item: &FeedItem) -> (String, String, String) {
 }
 
 fn format_video_meta(view_count: Option<u64>, duration: Option<&std::time::Duration>) -> String {
-    let views = view_count.map(|n| format_count(n)).unwrap_or_default();
+    let views = view_count.map(format_count).unwrap_or_default();
     let dur = duration
         .map(|d| {
             let secs = d.as_secs();

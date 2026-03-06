@@ -78,16 +78,19 @@ pub enum ItemType {
 
 /// Search filters (placeholder for now)
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct SearchFilters {}
 
 /// Channel detail view
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChannelDetail {
     pub item: ChannelItem,
     pub description: String,
     pub video_count: Option<u64>,
 }
 
+#[allow(dead_code)]
 impl FeedItem {
     pub fn thumbnail_key(&self) -> ThumbnailKey {
         match self {

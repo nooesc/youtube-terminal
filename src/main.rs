@@ -133,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_action(
     action: Action,
     state: &mut AppState,
@@ -222,8 +223,7 @@ fn handle_action(
                             }
                             2 => {
                                 // Open Channel -- navigate to channel detail
-                                let channel_id =
-                                    detail_state.detail.item.channel_id.clone();
+                                let channel_id = detail_state.detail.item.channel_id.clone();
                                 if !channel_id.is_empty() {
                                     state.previous_views.push(state.view.clone());
                                     state.view = View::ChannelDetail(channel_id);
@@ -271,8 +271,7 @@ fn handle_action(
                 config.mpv_ontop,
                 auth_state.cookie_path(),
             ) {
-                state.command.message =
-                    Some(format!("Playback error: {} (is mpv installed?)", e));
+                state.command.message = Some(format!("Playback error: {} (is mpv installed?)", e));
             }
         }
         Action::PlayAudio(ref id) => {
@@ -283,8 +282,7 @@ fn handle_action(
                 config.mpv_ontop,
                 auth_state.cookie_path(),
             ) {
-                state.command.message =
-                    Some(format!("Playback error: {} (is mpv installed?)", e));
+                state.command.message = Some(format!("Playback error: {} (is mpv installed?)", e));
             }
         }
         Action::Navigate(dir) => {
@@ -351,10 +349,7 @@ fn spawn_feed_load(
             Tab::Subscriptions => match provider.subscription_feed(None).await {
                 Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
                 Err(e) => {
-                    let _ = tx.send(Action::ShowError(format!(
-                        "Subscriptions error: {}",
-                        e
-                    )));
+                    let _ = tx.send(Action::ShowError(format!("Subscriptions error: {}", e)));
                     None
                 }
             },
@@ -392,11 +387,7 @@ fn spawn_detail_load(
     });
 }
 
-fn check_load_more(
-    state: &mut AppState,
-    provider: &Arc<RustyPipeProvider>,
-    tx: &ActionSender,
-) {
+fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: &ActionSender) {
     match &state.view {
         View::Home => {
             if state.loading.feed_loading || state.loading.loading_more_feed {
@@ -420,7 +411,10 @@ fn check_load_more(
                                 match provider.subscription_feed(Some(&ctoken)).await {
                                     Ok(page) => Some(LoadedPage::SubscriptionFeed(page)),
                                     Err(e) => {
-                                        let _ = tx.send(Action::ShowError(format!("Feed continuation error: {}", e)));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Feed continuation error: {}",
+                                            e
+                                        )));
                                         None
                                     }
                                 }
@@ -437,8 +431,7 @@ fn check_load_more(
                         };
 
                         if let Some(page) = result {
-                            let _ =
-                                tx.send(Action::AppendFeed(req_id, Box::new(page)));
+                            let _ = tx.send(Action::AppendFeed(req_id, Box::new(page)));
                         }
                     });
                 }

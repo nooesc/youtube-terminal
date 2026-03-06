@@ -11,7 +11,10 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
         let display = format!("/ {}|{}", before, after);
         (display, Style::default().fg(Color::Yellow))
     } else {
-        ("/ Search...".to_string(), Style::default().fg(Color::DarkGray))
+        (
+            "/ Search...".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )
     };
 
     let search = Paragraph::new(text)

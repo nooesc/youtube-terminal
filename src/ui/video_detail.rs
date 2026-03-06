@@ -22,7 +22,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // header (title, channel, stats)
+            Constraint::Length(5), // header (title, channel, stats)
             Constraint::Min(5),    // description
             Constraint::Length(7), // action menu
         ])
@@ -39,13 +39,9 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 fn render_header(f: &mut Frame, detail: &crate::models::VideoDetail, area: Rect) {
-    let views = detail
-        .item
-        .view_count
-        .map(|n| format_count(n))
-        .unwrap_or_default();
+    let views = detail.item.view_count.map(format_count).unwrap_or_default();
 
-    let likes = detail.like_count.map(|n| format_count(n)).unwrap_or_default();
+    let likes = detail.like_count.map(format_count).unwrap_or_default();
 
     let stats = if !likes.is_empty() {
         format!("{} views · {} likes", views, likes)
@@ -83,11 +79,7 @@ fn render_description(f: &mut Frame, description: &str, area: Rect) {
 }
 
 fn render_actions(f: &mut Frame, selected: usize, area: Rect) {
-    let actions = vec![
-        "Play Video (mpv window)",
-        "Play Audio Only",
-        "Open Channel",
-    ];
+    let actions = ["Play Video (mpv window)", "Play Audio Only", "Open Channel"];
 
     let items: Vec<ListItem> = actions
         .iter()
