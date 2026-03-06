@@ -275,7 +275,40 @@ fn handle_action(
                         }
                     }
                 }
-                _ => {}
+                View::ChannelDetail(_) => {
+                    if let Some(detail_state) = &state.channel_detail {
+                        match detail_state.selected_action {
+                            0 => {
+                                // Subscribe/Unsubscribe toggle
+                                let channel = detail_state.detail.item.clone();
+                                if detail_state.is_subscribed {
+                                    if db.unsubscribe(&channel.id).is_ok() {
+                                        state.command.message =
+                                            Some(format!("Unsubscribed from {}", channel.name));
+                                        if let Some(ref mut cd) = state.channel_detail {
+                                            cd.is_subscribed = false;
+                                        }
+                                    }
+                                } else if db.subscribe(&channel).is_ok() {
+                                    state.command.message =
+                                        Some(format!("Subscribed to {}", channel.name));
+                                    if let Some(ref mut cd) = state.channel_detail {
+                                        cd.is_subscribed = true;
+                                    }
+                                }
+                            }
+                            1 => {
+                                // Select a video from the channel's video list
+                                let video_idx = detail_state.selected_video;
+                                if let Some(video) = detail_state.detail.videos.get(video_idx) {
+                                    let v = video.clone();
+                                    spawn_detail_load(state, &v, provider, tx, db);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             // Don't dispatch Select to state -- we handle it entirely here
         }
@@ -348,7 +381,14 @@ fn handle_action(
             }
             state.dispatch(action);
         }
-        Action::ChannelDetailLoaded(_, _) | Action::PlaylistDetailLoaded(_, _) => {
+        Action::ChannelDetailLoaded(_, ref detail) => {
+            let is_subbed = db.is_subscribed(&detail.item.id).unwrap_or(false);
+            state.dispatch(action);
+            if let Some(ref mut cd) = state.channel_detail {
+                cd.is_subscribed = is_subbed;
+            }
+        }
+        Action::PlaylistDetailLoaded(_, _) => {
             state.dispatch(action);
         }
         Action::ThumbnailReady(ref key, ref path) => {
@@ -364,6 +404,74 @@ fn handle_action(
         }
         Action::ThumbnailFailed(_) => {
             state.dispatch(action);
+        }
+        Action::Subscribe(ref channel) => {
+            match db.subscribe(channel) {
+                Ok(()) => {
+                    state.command.message = Some(format!("Subscribed to {}", channel.name));
+                    if let Some(ref mut cd) = state.channel_detail {
+                        if cd.detail.item.id == channel.id {
+                            cd.is_subscribed = true;
+                        }
+                    }
+                }
+                Err(e) => {
+                    state.command.message = Some(format!("Subscribe error: {}", e));
+                }
+            }
+        }
+        Action::Unsubscribe(ref channel_id) => {
+            let name = state
+                .channel_detail
+                .as_ref()
+                .filter(|cd| cd.detail.item.id == *channel_id)
+                .map(|cd| cd.detail.item.name.clone())
+                .unwrap_or_else(|| channel_id.clone());
+            match db.unsubscribe(channel_id) {
+                Ok(()) => {
+                    state.command.message = Some(format!("Unsubscribed from {}", name));
+                    if let Some(ref mut cd) = state.channel_detail {
+                        if cd.detail.item.id == *channel_id {
+                            cd.is_subscribed = false;
+                        }
+                    }
+                }
+                Err(e) => {
+                    state.command.message = Some(format!("Unsubscribe error: {}", e));
+                }
+            }
+        }
+        Action::SubscribeSelected => {
+            let channel = match &state.view {
+                View::Search => {
+                    if let Some(FeedItem::Channel(c)) = state.selected_list_item() {
+                        Some(c.clone())
+                    } else {
+                        None
+                    }
+                }
+                View::Home => {
+                    if let Some(FeedItem::Channel(c)) = state.selected_card_item() {
+                        Some(c.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(channel) = channel {
+                let is_subbed = db.is_subscribed(&channel.id).unwrap_or(false);
+                if is_subbed {
+                    if db.unsubscribe(&channel.id).is_ok() {
+                        state.command.message =
+                            Some(format!("Unsubscribed from {}", channel.name));
+                    }
+                } else if db.subscribe(&channel).is_ok() {
+                    state.command.message = Some(format!("Subscribed to {}", channel.name));
+                }
+            } else {
+                state.command.message = Some("Select a channel to subscribe".into());
+            }
         }
         _ => {
             // All other actions go through normal dispatch

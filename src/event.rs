@@ -54,6 +54,9 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::VolumeUp),
         KeyCode::Char('-') => Some(Action::VolumeDown),
 
+        // Subscribe/Unsubscribe toggle
+        KeyCode::Char('S') => Some(Action::SubscribeSelected),
+
         // Command mode
         KeyCode::Char(':') => Some(Action::EnterCommandMode),
 
