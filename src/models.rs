@@ -83,6 +83,7 @@ pub struct ChannelDetail {
     pub item: ChannelItem,
     pub description: String,
     pub video_count: Option<u64>,
+    pub videos: Vec<VideoItem>,
 }
 
 /// Playlist detail view

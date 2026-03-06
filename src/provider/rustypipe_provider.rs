@@ -148,16 +148,26 @@ impl ContentProvider for RustyPipeProvider {
     }
 
     async fn trending(&self) -> Result<models::FeedPage<models::VideoItem>> {
-        let items = self
-            .client
-            .query()
-            .trending()
-            .await
-            .context("trending failed")?;
-        Ok(models::FeedPage {
-            items: items.iter().map(map_video_item).collect(),
-            continuation: None, // trending is not paginated
-        })
+        match self.client.query().trending().await {
+            Ok(items) => Ok(models::FeedPage {
+                items: items.iter().map(map_video_item).collect(),
+                continuation: None,
+            }),
+            Err(_) => {
+                // YouTube's trending endpoint is broken in RustyPipe 0.11.4
+                // (BadRequest). Fall back to recommendations from a popular video.
+                let details = self
+                    .client
+                    .query()
+                    .video_details("dQw4w9WgXcQ")
+                    .await
+                    .context("trending fallback failed")?;
+                Ok(models::FeedPage {
+                    items: details.recommended.items.iter().map(map_video_item).collect(),
+                    continuation: details.recommended.ctoken,
+                })
+            }
+        }
     }
 
     async fn video_detail(&self, id: &str) -> Result<models::VideoDetail> {
@@ -215,6 +225,7 @@ impl ContentProvider for RustyPipeProvider {
             },
             description: ch.description.clone(),
             video_count: ch.video_count,
+            videos: ch.content.items.iter().map(map_video_item).collect(),
         })
     }
 
