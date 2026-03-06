@@ -67,7 +67,6 @@ pub fn import_cookie_file(source: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Check if a cookie file at the given path is valid
-#[allow(dead_code)]
 pub fn validate_cookies(path: &Path) -> bool {
     if !path.exists() {
         return false;

@@ -57,6 +57,7 @@ pub enum Action {
     AppendSearch(u64, FeedPage<FeedItem>),
     DetailLoaded(u64, VideoDetail),
     ThumbnailReady(ThumbnailKey, PathBuf),
+    ThumbnailFailed(ThumbnailKey),
     PlayerStateUpdate(MpvPlayerState),
 
     // Command mode
@@ -374,6 +375,9 @@ impl AppState {
                 }
             }
             Action::ThumbnailReady(key, _path) => {
+                self.loading.thumbnail_loading.remove(&key);
+            }
+            Action::ThumbnailFailed(key) => {
                 self.loading.thumbnail_loading.remove(&key);
             }
             Action::PlayerStateUpdate(state) => {

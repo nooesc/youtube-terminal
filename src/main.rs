@@ -14,7 +14,7 @@ use auth::AuthState;
 use config::Config;
 use db::Database;
 use event::{create_action_channel, poll_event, ActionSender};
-use models::FeedItem;
+use models::{FeedItem, ItemType};
 use player::mpv::MpvPlayer;
 use player::PlayMode;
 use provider::rustypipe_provider::RustyPipeProvider;
@@ -105,6 +105,15 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
+        // Poll player state
+        if player.is_running() {
+            if let Ok(ps) = player.poll_state() {
+                if ps != state.player_state {
+                    state.dispatch(Action::PlayerStateUpdate(ps));
+                }
+            }
+        }
+
         // Drain async actions from channel
         while let Ok(action) = rx.try_recv() {
             handle_action(
@@ -173,17 +182,13 @@ fn handle_action(
             // Determine what to load based on current view
             match &state.view {
                 View::Search => {
-                    if let Some(item) = state.selected_list_item() {
-                        if let Some(video_id) = get_video_id(item) {
-                            spawn_detail_load(state, &video_id, provider, tx);
-                        }
+                    if let Some(item) = state.selected_list_item().cloned() {
+                        handle_item_select(&item, state, provider, tx);
                     }
                 }
                 View::Home => {
-                    if let Some(item) = state.selected_card_item() {
-                        if let Some(video_id) = get_video_id(item) {
-                            spawn_detail_load(state, &video_id, provider, tx);
-                        }
+                    if let Some(item) = state.selected_card_item().cloned() {
+                        handle_item_select(&item, state, provider, tx);
                     }
                 }
                 View::VideoDetail(_) => {
@@ -293,11 +298,11 @@ fn handle_action(
         }
         Action::FeedLoaded(_, _) | Action::SearchResults(_, _) => {
             state.dispatch(action);
-            spawn_thumbnail_downloads(state, tx, config);
+            spawn_thumbnail_downloads(state, tx, config, thumb_cache);
         }
         Action::AppendFeed(_, _) | Action::AppendSearch(_, _) => {
             state.dispatch(action);
-            spawn_thumbnail_downloads(state, tx, config);
+            spawn_thumbnail_downloads(state, tx, config, thumb_cache);
         }
         Action::ThumbnailReady(ref key, ref path) => {
             // Load the downloaded image into the render cache
@@ -423,7 +428,10 @@ fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: 
                             Tab::ForYou => match provider.home_feed(Some(&ctoken)).await {
                                 Ok(page) => Some(LoadedPage::Home(page)),
                                 Err(e) => {
-                                    eprintln!("Feed continuation error: {}", e);
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Feed continuation error: {}",
+                                        e
+                                    )));
                                     None
                                 }
                             },
@@ -472,14 +480,32 @@ fn check_load_more(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: 
     }
 }
 
-fn get_video_id(item: &FeedItem) -> Option<String> {
+fn handle_item_select(
+    item: &FeedItem,
+    state: &mut AppState,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+) {
     match item {
-        FeedItem::Video(v) | FeedItem::Short(v) => Some(v.id.clone()),
-        _ => None,
+        FeedItem::Video(v) | FeedItem::Short(v) => {
+            spawn_detail_load(state, &v.id, provider, tx);
+        }
+        FeedItem::Channel(c) => {
+            state.previous_views.push(state.view.clone());
+            state.view = View::ChannelDetail(c.id.clone());
+        }
+        FeedItem::Playlist(_) => {
+            state.command.message = Some("Playlist view not yet implemented".into());
+        }
     }
 }
 
-fn spawn_thumbnail_downloads(state: &mut AppState, tx: &ActionSender, config: &Config) {
+fn spawn_thumbnail_downloads(
+    state: &mut AppState,
+    tx: &ActionSender,
+    config: &Config,
+    thumb_cache: &ThumbnailCache,
+) {
     let items = match &state.view {
         View::Home => &state.cards.items,
         View::Search => &state.video_list.items,
@@ -487,13 +513,29 @@ fn spawn_thumbnail_downloads(state: &mut AppState, tx: &ActionSender, config: &C
     };
 
     let cache_dir = config.thumbnail_dir();
-    for item in items.iter().take(12) {
+    for item in items.iter() {
         let key = item.thumbnail_key();
-        if state.loading.thumbnail_loading.contains(&key) {
+        if state.loading.thumbnail_loading.contains(&key) || thumb_cache.get(&key).is_some() {
             continue;
         }
         let url = item.thumbnail_url().to_string();
         if url.is_empty() {
+            continue;
+        }
+
+        // Check if file already exists on disk
+        let filename = format!(
+            "{}_{}.jpg",
+            match key.item_type {
+                ItemType::Video => "video",
+                ItemType::Channel => "channel",
+                ItemType::Playlist => "playlist",
+            },
+            key.item_id
+        );
+        let cached_path = cache_dir.join(&filename);
+        if cached_path.exists() {
+            let _ = tx.send(Action::ThumbnailReady(key, cached_path));
             continue;
         }
 
@@ -507,7 +549,7 @@ fn spawn_thumbnail_downloads(state: &mut AppState, tx: &ActionSender, config: &C
                     let _ = tx.send(Action::ThumbnailReady(key_clone, path));
                 }
                 Err(_) => {
-                    // Silently ignore thumbnail download failures
+                    let _ = tx.send(Action::ThumbnailFailed(key_clone));
                 }
             }
         });
@@ -539,16 +581,32 @@ fn execute_command(
 
     if let Some(path_str) = cmd.strip_prefix("import-cookies ") {
         let path_str = path_str.trim();
-        let source = std::path::Path::new(path_str);
+        // Expand ~ to home directory
+        let expanded = if let Some(rest) = path_str.strip_prefix("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(rest)
+            } else {
+                std::path::PathBuf::from(path_str)
+            }
+        } else {
+            std::path::PathBuf::from(path_str)
+        };
+        let source = expanded.as_path();
         let dest = config.cookie_path();
 
         match auth::cookies::import_cookie_file(source, &dest) {
             Ok(()) => {
+                // Validate the imported cookies before reporting success
+                if !auth::cookies::validate_cookies(&dest) {
+                    state.command.message = Some("Error: imported cookies are invalid".into());
+                    return;
+                }
                 // Reload cookies into the provider
                 if let Ok(content) = std::fs::read_to_string(&dest) {
                     let provider = Arc::clone(provider);
                     tokio::spawn(async move {
                         let _ = provider.set_cookies(&content).await;
+                        // Note: set_authenticated requires &mut, handled via auth_state below
                     });
                 }
                 // Update auth state

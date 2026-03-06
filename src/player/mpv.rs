@@ -220,6 +220,16 @@ impl MpvPlayer {
         }
 
         if let Some(ref mut child) = self.process {
+            // Give mpv up to 500ms to exit gracefully
+            for _ in 0..5 {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                    Err(_) => break,
+                }
+            }
+            // Force kill if still running
+            let _ = child.kill();
             let _ = child.wait(); // reap zombie
         }
 

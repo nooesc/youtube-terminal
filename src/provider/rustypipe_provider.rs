@@ -188,6 +188,17 @@ impl ContentProvider for RustyPipeProvider {
             .await
             .context("video_details failed")?;
 
+        // Try to get duration and thumbnail from recommended items if our video appears
+        let mut duration = None;
+        let mut thumbnail_url = String::new();
+        for rec in &details.recommended.items {
+            if rec.id == details.id {
+                duration = rec.duration.map(|d| Duration::from_secs(d as u64));
+                thumbnail_url = best_thumbnail_url(&rec.thumbnail);
+                break;
+            }
+        }
+
         Ok(models::VideoDetail {
             item: models::VideoItem {
                 id: details.id.clone(),
@@ -195,13 +206,13 @@ impl ContentProvider for RustyPipeProvider {
                 channel: details.channel.name.clone(),
                 channel_id: details.channel.id.clone(),
                 view_count: Some(details.view_count),
-                duration: None, // VideoDetails doesn't carry duration
+                duration,
                 published: details.publish_date.map(to_chrono),
-                thumbnail_url: String::new(), // not needed for detail view
+                thumbnail_url,
             },
             description: details.description.to_plaintext(),
             like_count: details.like_count.map(|n| n as u64),
-            keywords: Vec::new(), // VideoDetails doesn't expose keywords
+            keywords: Vec::new(),
         })
     }
 
@@ -293,18 +304,30 @@ impl ContentProvider for RustyPipeProvider {
 
     async fn subscription_feed(
         &self,
-        _continuation: Option<&str>,
+        continuation: Option<&str>,
     ) -> Result<models::FeedPage<models::VideoItem>> {
-        // RustyPipeQuery::subscription_feed() already calls .authenticated() internally
-        let page = self
-            .client
-            .query()
-            .subscription_feed()
-            .await
-            .context("subscription_feed failed")?;
-        Ok(models::FeedPage {
-            items: page.items.iter().map(map_video_item).collect(),
-            continuation: page.ctoken,
-        })
+        if let Some(ctoken) = continuation {
+            let page = self
+                .client
+                .query()
+                .continuation::<RpVideoItem, _>(ctoken, ContinuationEndpoint::Browse, None)
+                .await
+                .context("subscription_feed continuation failed")?;
+            Ok(models::FeedPage {
+                items: page.items.iter().map(map_video_item).collect(),
+                continuation: page.ctoken,
+            })
+        } else {
+            let page = self
+                .client
+                .query()
+                .subscription_feed()
+                .await
+                .context("subscription_feed failed")?;
+            Ok(models::FeedPage {
+                items: page.items.iter().map(map_video_item).collect(),
+                continuation: page.ctoken,
+            })
+        }
     }
 }

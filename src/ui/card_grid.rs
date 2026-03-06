@@ -229,12 +229,13 @@ fn format_count(n: u64) -> String {
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else if max > 3 {
-        format!("{}...", &s[..max - 3])
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{}...", truncated)
     } else {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     }
 }
 
@@ -262,6 +263,8 @@ mod tests {
         assert_eq!(truncate_str("hello world", 8), "hello...");
         assert_eq!(truncate_str("ab", 2), "ab");
         assert_eq!(truncate_str("abcd", 3), "abc");
+        // Unicode safety
+        assert_eq!(truncate_str("こんにちは世界", 6), "こんに...");
     }
 
     #[test]

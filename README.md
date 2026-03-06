@@ -1,8 +1,8 @@
 # youtube-terminal
 
 A terminal-based YouTube client built with Rust. Browse trending videos, search
-YouTube, manage subscriptions, and play content through mpv -- all from your
-terminal.
+YouTube, view subscription feeds (with cookies), and play content through mpv --
+all from your terminal.
 
 Built with [ratatui](https://ratatui.rs) for the TUI,
 [mpv](https://mpv.io) for playback, and
