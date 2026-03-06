@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // 9. Spawn initial feed load
-    spawn_feed_load(&mut state, &provider, &tx);
+    spawn_feed_load(&mut state, &provider, &tx, &db);
 
     // 10. Main loop
     loop {
@@ -222,7 +222,7 @@ fn handle_action(
         }
         Action::SwitchTab(_) => {
             state.dispatch(action);
-            spawn_feed_load(state, provider, tx);
+            spawn_feed_load(state, provider, tx, db);
         }
         Action::TogglePause => {
             let _ = player.toggle_pause();
@@ -281,10 +281,27 @@ fn handle_action(
     }
 }
 
-fn spawn_feed_load(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: &ActionSender) {
+fn spawn_feed_load(
+    state: &mut AppState,
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+    db: &Database,
+) {
     state.loading.feed_request_id += 1;
     state.loading.feed_loading = true;
     let req_id = state.loading.feed_request_id;
+
+    // History tab: load synchronously from local SQLite DB
+    if state.tabs.active == Tab::History {
+        let history = db.get_history(50, 0).unwrap_or_default();
+        let page = LoadedPage::History(models::FeedPage {
+            items: history,
+            continuation: None,
+        });
+        let _ = tx.send(Action::FeedLoaded(req_id, Box::new(page)));
+        return;
+    }
+
     let tx = tx.clone();
     let provider = Arc::clone(provider);
     let tab = state.tabs.active;
@@ -305,11 +322,7 @@ fn spawn_feed_load(state: &mut AppState, provider: &Arc<RustyPipeProvider>, tx: 
                     None
                 }
             },
-            Tab::History => {
-                // History is loaded from local DB, not from provider.
-                // Will be handled in Task 20.
-                None
-            }
+            Tab::History => unreachable!("History tab handled synchronously above"),
         };
 
         if let Some(page) = result {
