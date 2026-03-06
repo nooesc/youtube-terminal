@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod history;
+pub mod subscriptions;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -56,6 +57,14 @@ impl Database {
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                channel_id TEXT PRIMARY KEY,
+                channel_name TEXT NOT NULL,
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                subscriber_count INTEGER,
+                subscribed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
             );",
         )?;
         Ok(())
@@ -65,7 +74,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ItemType, ThumbnailKey};
+    use crate::models::{ChannelItem, ItemType, ThumbnailKey};
     use std::path::PathBuf;
 
     fn test_db() -> Database {
@@ -125,5 +134,40 @@ mod tests {
             .unwrap();
         let path = db.get_thumbnail_path(&key).unwrap().unwrap();
         assert_eq!(path, PathBuf::from("/tmp/thumb.jpg"));
+    }
+
+    #[test]
+    fn test_subscribe_and_list() {
+        let db = test_db();
+        let channel = ChannelItem {
+            id: "UC123".into(),
+            name: "Test Channel".into(),
+            subscriber_count: Some(1000),
+            thumbnail_url: "http://thumb.jpg".into(),
+        };
+        db.subscribe(&channel).unwrap();
+        assert!(db.is_subscribed("UC123").unwrap());
+        let subs = db.get_subscriptions().unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].id, "UC123");
+        assert_eq!(subs[0].name, "Test Channel");
+        assert_eq!(subs[0].subscriber_count, Some(1000));
+        assert_eq!(subs[0].thumbnail_url, "http://thumb.jpg");
+    }
+
+    #[test]
+    fn test_unsubscribe() {
+        let db = test_db();
+        let channel = ChannelItem {
+            id: "UC456".into(),
+            name: "Another Channel".into(),
+            subscriber_count: None,
+            thumbnail_url: "".into(),
+        };
+        db.subscribe(&channel).unwrap();
+        assert!(db.is_subscribed("UC456").unwrap());
+        db.unsubscribe("UC456").unwrap();
+        assert!(!db.is_subscribed("UC456").unwrap());
+        assert_eq!(db.get_subscriptions().unwrap().len(), 0);
     }
 }
