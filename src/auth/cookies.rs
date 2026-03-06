@@ -36,18 +36,10 @@ pub fn parse_netscape_cookies(content: &str) -> Result<Vec<Cookie>> {
     Ok(cookies)
 }
 
-/// Filter a Netscape cookie file to only YouTube/Google domains.
+/// Filter a Netscape cookie file to only .youtube.com domain lines.
+/// RustyPipe's parser requires exactly `.youtube.com` domain and errors
+/// on malformed lines, so we must pre-filter strictly.
 fn filter_youtube_cookies(content: &str) -> String {
-    let dominated_by = |domain: &str| -> bool {
-        let d = domain.trim_start_matches('.');
-        d == "youtube.com"
-            || d.ends_with(".youtube.com")
-            || d == "google.com"
-            || d.ends_with(".google.com")
-            || d == "googlevideo.com"
-            || d.ends_with(".googlevideo.com")
-    };
-
     let mut out = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -56,11 +48,10 @@ fn filter_youtube_cookies(content: &str) -> String {
             out.push('\n');
             continue;
         }
-        if let Some(domain) = trimmed.split('\t').next() {
-            if dominated_by(domain) {
-                out.push_str(line);
-                out.push('\n');
-            }
+        let fields: Vec<&str> = trimmed.split('\t').collect();
+        if fields.len() >= 7 && fields[0] == ".youtube.com" {
+            out.push_str(line);
+            out.push('\n');
         }
     }
     out
