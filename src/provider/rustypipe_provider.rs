@@ -37,14 +37,6 @@ impl RustyPipeProvider {
         Ok(())
     }
 
-    /// Check if the loaded cookies represent a valid YouTube session.
-    pub async fn check_cookie(&self) -> Result<()> {
-        self.client
-            .user_auth_check_cookie()
-            .await
-            .context("failed to validate authenticated YouTube session")?;
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------

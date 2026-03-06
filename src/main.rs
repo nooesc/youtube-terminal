@@ -57,11 +57,9 @@ async fn main() -> anyhow::Result<()> {
     let provider = RustyPipeProvider::new(&config.rustypipe_storage_dir()).await?;
     if let AuthState::Authenticated { cookie_path } = &auth_state {
         if let Ok(content) = std::fs::read_to_string(cookie_path) {
-            if provider.set_cookies(&content).await.is_err() {
-                auth_state = AuthState::NoAuth;
-            }
-        } else {
-            auth_state = AuthState::NoAuth;
+            // Try to load cookies into RustyPipe for authenticated API calls.
+            // If this fails (e.g. stale session), cookies still work for mpv/yt-dlp.
+            let _ = provider.set_cookies(&content).await;
         }
     }
     let provider = Arc::new(provider);
@@ -748,44 +746,31 @@ fn execute_command(
 
         match auth::cookies::import_cookie_file(source, &dest) {
             Ok(()) => {
-                // Load cookies into the provider
-                if let Ok(content) = std::fs::read_to_string(&dest) {
-                    let provider_for_set = Arc::clone(provider);
-                    let provider_for_check = Arc::clone(provider);
-                    let set_result = tokio::task::block_in_place(|| {
+                // Cookies saved to disk — mark as authenticated.
+                // Try loading into RustyPipe for API calls, but don't fail
+                // if it rejects them — cookies still work for mpv/yt-dlp playback.
+                *auth_state = AuthState::Authenticated { cookie_path: dest };
+                if let Ok(content) = std::fs::read_to_string(
+                    auth_state.cookie_path().unwrap(),
+                ) {
+                    let provider_clone = Arc::clone(provider);
+                    let rp_ok = tokio::task::block_in_place(|| {
                         Handle::current().block_on(async move {
-                            provider_for_set.set_cookies(&content).await
+                            provider_clone.set_cookies(&content).await
                         })
                     });
-
-                    match set_result {
-                        Ok(()) => {
-                            *auth_state =
-                                AuthState::Authenticated { cookie_path: dest };
-                            // Try session validation — warn but don't block
-                            let check_ok = tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async move {
-                                    provider_for_check.check_cookie().await
-                                })
-                            });
-                            if check_ok.is_ok() {
-                                state.command.message =
-                                    Some("Cookies imported and session verified".into());
-                            } else {
-                                state.command.message = Some(
-                                    "Cookies imported (session check failed — subscriptions may not work)".into(),
-                                );
-                            }
-                            spawn_feed_load(state, provider, tx, db);
-                        }
-                        Err(e) => {
-                            state.command.message =
-                                Some(format!("Error loading cookies: {}", e));
-                        }
+                    if rp_ok.is_ok() {
+                        state.command.message =
+                            Some("Cookies imported — subscriptions enabled".into());
+                    } else {
+                        state.command.message =
+                            Some("Cookies imported — playback will use your account".into());
                     }
                 } else {
-                    state.command.message = Some("Error: failed to read imported cookies".into());
+                    state.command.message =
+                        Some("Cookies imported successfully".into());
                 }
+                spawn_feed_load(state, provider, tx, db);
             }
             Err(e) => {
                 state.command.message = Some(format!("Error: {}", e));
