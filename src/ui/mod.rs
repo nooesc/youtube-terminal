@@ -1,5 +1,6 @@
 pub mod search_bar;
 pub mod tab_bar;
+pub mod video_list;
 
 use crate::app::AppState;
 use ratatui::prelude::*;
@@ -23,33 +24,37 @@ pub fn render(f: &mut Frame, state: &AppState) {
 }
 
 fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
-    // Placeholder -- will be replaced by card grid, video list, or detail view
-    let text = match &state.view {
+    match &state.view {
+        crate::app::View::Search => {
+            video_list::render(f, state, area);
+        }
         crate::app::View::Home => {
-            if state.loading.feed_loading {
+            // Placeholder for card grid (Task 17)
+            let text = if state.loading.feed_loading {
                 "Loading...".to_string()
             } else if state.cards.items.is_empty() {
-                "No content. Press 1/2/3 to switch tabs.".to_string()
+                "No content. Press / to search.".to_string()
             } else {
                 format!("{} items loaded", state.cards.items.len())
-            }
+            };
+            let content = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Content"));
+            f.render_widget(content, area);
         }
-        crate::app::View::Search => {
-            if state.loading.search_loading {
-                "Searching...".to_string()
-            } else if state.video_list.items.is_empty() {
-                "Type a query and press Enter".to_string()
-            } else {
-                format!("{} results", state.video_list.items.len())
-            }
+        crate::app::View::VideoDetail(id) => {
+            // Placeholder for video detail (Task 14)
+            let text = format!("Video detail: {}", id);
+            let content = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Video Detail"));
+            f.render_widget(content, area);
         }
-        crate::app::View::VideoDetail(id) => format!("Video detail: {}", id),
-        crate::app::View::ChannelDetail(id) => format!("Channel detail: {}", id),
-    };
-
-    let content = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("Content"));
-    f.render_widget(content, area);
+        crate::app::View::ChannelDetail(id) => {
+            let text = format!("Channel: {}", id);
+            let content = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL).title("Channel"));
+            f.render_widget(content, area);
+        }
+    }
 }
 
 fn render_now_playing(f: &mut Frame, state: &AppState, area: Rect) {
