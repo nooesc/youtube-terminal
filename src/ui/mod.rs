@@ -1,3 +1,4 @@
+pub mod now_playing;
 pub mod search_bar;
 pub mod tab_bar;
 pub mod video_detail;
@@ -21,7 +22,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
     search_bar::render(f, state, chunks[0]);
     tab_bar::render(f, state, chunks[1]);
     render_content(f, state, chunks[2]);
-    render_now_playing(f, state, chunks[3]);
+    now_playing::render(f, state, chunks[3]);
 }
 
 fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
@@ -54,35 +55,3 @@ fn render_content(f: &mut Frame, state: &AppState, area: Rect) {
     }
 }
 
-fn render_now_playing(f: &mut Frame, state: &AppState, area: Rect) {
-    use crate::player::PlayerState;
-
-    let text = match &state.player_state {
-        PlayerState::Stopped => "No media playing".to_string(),
-        PlayerState::Playing(info) => {
-            format!(
-                "▶ {} — {}:{:02}/{}:{:02}",
-                info.title,
-                (info.time_pos / 60.0) as u32,
-                (info.time_pos % 60.0) as u32,
-                (info.duration / 60.0) as u32,
-                (info.duration % 60.0) as u32,
-            )
-        }
-        PlayerState::Paused(info) => {
-            format!(
-                "❚❚ {} — {}:{:02}/{}:{:02}",
-                info.title,
-                (info.time_pos / 60.0) as u32,
-                (info.time_pos % 60.0) as u32,
-                (info.duration / 60.0) as u32,
-                (info.duration % 60.0) as u32,
-            )
-        }
-    };
-
-    let now_playing = Paragraph::new(text)
-        .style(Style::default().fg(Color::Cyan))
-        .block(Block::default().borders(Borders::ALL).title("Now Playing"));
-    f.render_widget(now_playing, area);
-}
