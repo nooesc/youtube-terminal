@@ -6,14 +6,16 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 pub const CARD_WIDTH: u16 = 50;
-pub const CARD_HEIGHT: u16 = 16;
+pub const CARD_HEIGHT: u16 = 14;
 pub const THUMB_HEIGHT: u16 = 8;
 
 pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
     if state.loading.feed_loading && state.cards.items.is_empty() {
-        let loading = Paragraph::new("Loading...")
-            .style(Style::default().fg(Color::Yellow));
-        f.render_widget(loading, Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1));
+        let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::Yellow));
+        f.render_widget(
+            loading,
+            Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1),
+        );
         return;
     }
 
@@ -23,9 +25,11 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thumbna
         } else {
             "No content yet. Press / to search."
         };
-        let empty = Paragraph::new(msg)
-            .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(empty, Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1));
+        let empty = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+        f.render_widget(
+            empty,
+            Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1),
+        );
         return;
     }
 
@@ -111,17 +115,11 @@ fn render_card(
     }
 
     let (title, channel, views, time_ago) = format_card_item(item);
-    // Reserve lines below thumbnail: title (up to 2), channel (1), meta (1) = 4
-    let thumb_h = THUMB_HEIGHT.min(inner.height.saturating_sub(5));
-    let thumb_area = Rect::new(inner.x, inner.y, inner.width, thumb_h);
-    render_thumbnail(f, item, thumb_area, thumb_cache);
-
-    let text_y = inner.y + thumb_area.height;
     let w = inner.width as usize;
 
-    // Title (up to 2 lines)
+    // Build text lines (title up to 2 lines, channel, meta) — anchored to bottom
     let title_chars: Vec<char> = title.chars().collect();
-    let title_lines = if title_chars.len() > w && w > 3 {
+    let title_lines: Vec<String> = if title_chars.len() > w && w > 3 {
         let line1: String = title_chars[..w].iter().collect();
         let rest: String = title_chars[w..].iter().collect();
         vec![line1, truncate_str(&rest, w)]
@@ -129,52 +127,62 @@ fn render_card(
         vec![title.clone()]
     };
 
-    for (i, tline) in title_lines.iter().enumerate() {
-        let y = text_y + i as u16;
-        if y >= inner.y + inner.height {
-            break;
+    let meta = if time_ago.is_empty() {
+        views
+    } else if views.is_empty() {
+        time_ago
+    } else {
+        format!("{} \u{00b7} {}", views, time_ago)
+    };
+
+    // text_lines = title(1-2) + channel(1) + meta(1) = 3-4 lines
+    let text_count = title_lines.len() as u16 + 2; // +1 channel +1 meta
+    let text_start_y = inner.y + inner.height - text_count;
+
+    // Thumbnail fills everything above the text
+    let thumb_h = inner.height.saturating_sub(text_count);
+    if thumb_h > 0 {
+        let thumb_area = Rect::new(inner.x, inner.y, inner.width, thumb_h);
+        render_thumbnail(f, item, thumb_area, thumb_cache);
+    }
+
+    // Title
+    let mut y = text_start_y;
+    for tline in &title_lines {
+        if y < inner.y + inner.height {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    tline.clone(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))),
+                Rect::new(inner.x, y, inner.width, 1),
+            );
+            y += 1;
         }
+    }
+
+    // Channel
+    if y < inner.y + inner.height {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                tline.clone(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                truncate_str(&channel, w),
+                Style::default().fg(Color::DarkGray),
             ))),
             Rect::new(inner.x, y, inner.width, 1),
         );
+        y += 1;
     }
 
-    let after_title = text_y + title_lines.len() as u16;
-
-    // Channel
-    if after_title < inner.y + inner.height {
-        let truncated_channel = truncate_str(&channel, w);
+    // Meta
+    if y < inner.y + inner.height {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                truncated_channel,
+                truncate_str(&meta, w),
                 Style::default().fg(Color::DarkGray),
             ))),
-            Rect::new(inner.x, after_title, inner.width, 1),
-        );
-    }
-
-    // Views + time ago
-    if after_title + 1 < inner.y + inner.height {
-        let meta = if time_ago.is_empty() {
-            views
-        } else if views.is_empty() {
-            time_ago
-        } else {
-            format!("{} \u{00b7} {}", views, time_ago)
-        };
-        let truncated_meta = truncate_str(&meta, w);
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                truncated_meta,
-                Style::default().fg(Color::DarkGray),
-            ))),
-            Rect::new(inner.x, after_title + 1, inner.width, 1),
+            Rect::new(inner.x, y, inner.width, 1),
         );
     }
 }
