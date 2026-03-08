@@ -1,4 +1,4 @@
-use crate::app::{Action, AppState, Direction, Tab};
+use crate::app::{Action, AppState, Direction, PopupState, Tab};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -12,6 +12,11 @@ pub fn create_action_channel() -> (ActionSender, ActionReceiver) {
 
 /// Map a key event to an Action based on current view state
 pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
+    // If popup is active, handle popup input
+    if state.popup.is_some() {
+        return map_popup_key(key, state);
+    }
+
     // If command mode is active, handle command input
     if state.command.active {
         return map_command_key(key);
@@ -80,18 +85,50 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::Char('Q') => Some(Action::TogglePlaybackQuality),
         KeyCode::Char('X') => Some(Action::StopPlayerAndQuit),
 
-        // Subscribe/Unsubscribe toggle
-        KeyCode::Char('S') => Some(Action::SubscribeSelected),
+        // Subscribe/Unsubscribe toggle (or save search in search view)
+        KeyCode::Char('S') => {
+            if state.view == crate::app::View::Search {
+                Some(Action::OpenSaveSearchPopup)
+            } else {
+                Some(Action::SubscribeSelected)
+            }
+        }
 
         // Filter mode (only in search view)
         KeyCode::Char('f') if state.view == crate::app::View::Search => {
             Some(Action::EnterFilterMode)
         }
 
+        // Saved search actions (delete/rename in SavedSearches tab)
+        KeyCode::Char('d') if state.view == crate::app::View::Home && state.tabs.active == Tab::SavedSearches => {
+            Some(Action::OpenDeleteSearchConfirm)
+        }
+        KeyCode::Char('r') if state.view == crate::app::View::Home && state.tabs.active == Tab::SavedSearches => {
+            Some(Action::OpenRenameSearchPopup)
+        }
+
         // Command mode
         KeyCode::Char(':') => Some(Action::EnterCommandMode),
 
         _ => None,
+    }
+}
+
+fn map_popup_key(key: KeyEvent, state: &AppState) -> Option<Action> {
+    match &state.popup {
+        Some(PopupState::ConfirmDelete { .. }) => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::PopupSubmit),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Action::PopupCancel),
+            _ => None,
+        },
+        Some(PopupState::SaveSearch { .. } | PopupState::Rename { .. }) => match key.code {
+            KeyCode::Enter => Some(Action::PopupSubmit),
+            KeyCode::Esc => Some(Action::PopupCancel),
+            KeyCode::Backspace => Some(Action::PopupBackspace),
+            KeyCode::Char(c) => Some(Action::PopupInput(c)),
+            _ => None,
+        },
+        None => None,
     }
 }
 
