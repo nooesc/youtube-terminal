@@ -723,7 +723,15 @@ fn restore_saved_session(
     }
 
     match &saved.view {
-        View::Home => spawn_feed_load(state, provider, tx, db),
+        View::Home => {
+            spawn_feed_load(state, provider, tx, db);
+            // SavedSearches tab has no async load, apply restore directly
+            if saved.active_tab == Tab::SavedSearches {
+                let max = state.saved_searches.items.len().saturating_sub(1);
+                state.saved_searches.selected = saved.saved_search_selected.min(max);
+                state.pending_restore = None;
+            }
+        }
         View::Search => {
             if saved.search_query.is_empty() {
                 state.view = View::Home;
@@ -992,6 +1000,11 @@ fn spawn_feed_load(
     tx: &ActionSender,
     db: &Database,
 ) {
+    // SavedSearches tab uses local DB, no feed load needed
+    if state.tabs.active == Tab::SavedSearches {
+        return;
+    }
+
     state.loading.feed_request_id += 1;
     state.loading.feed_loading = true;
     let req_id = state.loading.feed_request_id;

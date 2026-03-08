@@ -5,6 +5,7 @@ use rusqlite::params;
 use super::Database;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SavedSearch {
     pub id: i64,
     pub name: String,

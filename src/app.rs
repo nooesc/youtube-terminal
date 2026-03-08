@@ -87,7 +87,6 @@ pub enum Action {
     OpenSaveSearchPopup,
     OpenRenameSearchPopup,
     OpenDeleteSearchConfirm,
-    ExecuteSavedSearch(i64),
 
     // Popup
     PopupInput(char),
@@ -773,9 +772,6 @@ impl AppState {
                     let name = search.name.clone();
                     self.popup = Some(PopupState::ConfirmDelete { id, name });
                 }
-            }
-            Action::ExecuteSavedSearch(_) => {
-                // Handled by caller in main.rs
             }
             Action::PopupInput(ch) => {
                 match self.popup {
