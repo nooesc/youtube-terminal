@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod history;
+pub mod saved_searches;
 pub mod subscriptions;
 
 use anyhow::Result;
@@ -65,6 +66,18 @@ impl Database {
                 thumbnail_url TEXT NOT NULL DEFAULT '',
                 subscriber_count INTEGER,
                 subscribed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                query TEXT NOT NULL,
+                sort TEXT NOT NULL DEFAULT 'Relevance',
+                date TEXT NOT NULL DEFAULT 'Any',
+                item_type TEXT NOT NULL DEFAULT 'All',
+                length TEXT NOT NULL DEFAULT 'Any',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                last_run_at TEXT
             );",
         )?;
         Ok(())
@@ -74,6 +87,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{SearchDate, SearchItemType, SearchLength, SearchSort};
     use crate::models::{ChannelItem, ItemType, ThumbnailKey};
     use std::path::PathBuf;
 
@@ -169,5 +183,92 @@ mod tests {
         db.unsubscribe("UC456").unwrap();
         assert!(!db.is_subscribed("UC456").unwrap());
         assert_eq!(db.get_subscriptions().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_save_and_list_searches() {
+        let db = test_db();
+        let id = db
+            .save_search(
+                "Rust tutorials",
+                "rust programming",
+                SearchSort::Views,
+                SearchDate::Month,
+                SearchItemType::Video,
+                SearchLength::Long,
+            )
+            .unwrap();
+        assert!(id > 0);
+
+        let searches = db.get_saved_searches().unwrap();
+        assert_eq!(searches.len(), 1);
+        assert_eq!(searches[0].id, id);
+        assert_eq!(searches[0].name, "Rust tutorials");
+        assert_eq!(searches[0].query, "rust programming");
+        assert_eq!(searches[0].sort, SearchSort::Views);
+        assert_eq!(searches[0].date, SearchDate::Month);
+        assert_eq!(searches[0].item_type, SearchItemType::Video);
+        assert_eq!(searches[0].length, SearchLength::Long);
+        assert!(!searches[0].created_at.is_empty());
+        assert!(searches[0].last_run_at.is_none());
+    }
+
+    #[test]
+    fn test_delete_saved_search() {
+        let db = test_db();
+        let id = db
+            .save_search(
+                "Delete me",
+                "query",
+                SearchSort::Relevance,
+                SearchDate::Any,
+                SearchItemType::All,
+                SearchLength::Any,
+            )
+            .unwrap();
+        assert_eq!(db.get_saved_searches().unwrap().len(), 1);
+        db.delete_saved_search(id).unwrap();
+        assert_eq!(db.get_saved_searches().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_rename_saved_search() {
+        let db = test_db();
+        let id = db
+            .save_search(
+                "Old name",
+                "query",
+                SearchSort::Relevance,
+                SearchDate::Any,
+                SearchItemType::All,
+                SearchLength::Any,
+            )
+            .unwrap();
+        db.rename_saved_search(id, "New name").unwrap();
+        let searches = db.get_saved_searches().unwrap();
+        assert_eq!(searches[0].name, "New name");
+    }
+
+    #[test]
+    fn test_update_last_run() {
+        let db = test_db();
+        let id = db
+            .save_search(
+                "Test search",
+                "query",
+                SearchSort::Relevance,
+                SearchDate::Any,
+                SearchItemType::All,
+                SearchLength::Any,
+            )
+            .unwrap();
+
+        let searches = db.get_saved_searches().unwrap();
+        assert!(searches[0].last_run_at.is_none());
+
+        db.update_last_run(id).unwrap();
+
+        let searches = db.get_saved_searches().unwrap();
+        assert!(searches[0].last_run_at.is_some());
     }
 }
