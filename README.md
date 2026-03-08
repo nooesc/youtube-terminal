@@ -1,5 +1,7 @@
 # youtube-terminal
 
+![youtube-terminal screenshot](screenshot.png)
+
 A terminal-based YouTube client built with Rust. Browse trending videos, search
 YouTube, view subscription feeds (with cookies), and play content through mpv --
 all from your terminal.
@@ -122,6 +124,10 @@ something, press `q`, and the video keeps running after the popup closes.
 On the next launch, youtube-terminal restores the previous terminal view and
 tries to reconnect to the still-running player session automatically. Use `X`
 or `:stop-player` when you want to stop the detached player explicitly.
+
+The last `mpv` window size and position are also reused when you switch videos
+or relaunch the app, so the player stays where you left it instead of jumping
+back to the default geometry each time.
 
 ## License
 
