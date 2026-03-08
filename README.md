@@ -2,8 +2,8 @@
 
 ![youtube-terminal screenshot](screenshot.png)
 
-A terminal-based YouTube client built with Rust. Browse trending videos, search
-YouTube, view subscription feeds (with cookies), and play content through mpv --
+A terminal-based YouTube client built with Rust. Browse videos, search
+YouTube, manage subscriptions, and play content through mpv --
 all from your terminal.
 
 Built with [ratatui](https://ratatui.rs) for the TUI,
@@ -44,32 +44,6 @@ Or build and run directly:
 cargo run --release
 ```
 
-## Cookie setup
-
-To access the cookie-backed subscription feed, you need to export your YouTube
-cookies from your browser. The `For You` tab is still trending-based; a real
-personalized home feed is not implemented yet.
-
-### Export cookies from Firefox
-
-1. Install the [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-   Firefox extension.
-2. Go to [youtube.com](https://www.youtube.com) and make sure you are logged in.
-3. Click the extension icon and export cookies for `youtube.com`.
-4. Save the file (e.g., `~/cookies.txt`).
-
-### Import cookies
-
-From within youtube-terminal, press `:` to enter command mode, then type:
-
-```
-import-cookies ~/cookies.txt
-```
-
-The cookies are copied to the application data directory with restricted
-permissions (0600). If the import succeeds, the Subscriptions tab can use your
-authenticated subscription feed.
-
 ## Key bindings
 
 | Key                        | Action                    |
@@ -96,7 +70,6 @@ authenticated subscription feed.
 | -------------------------- | ------------------------- |
 | `:q`                       | Quit or detach player     |
 | `:stop-player`             | Stop detached player      |
-| `:import-cookies <path>`   | Import browser cookies    |
 
 ## Saved Searches
 
