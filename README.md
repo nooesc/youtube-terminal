@@ -76,7 +76,10 @@ authenticated subscription feed.
 | -------------------------- | ------------------------- |
 | `q` / `Ctrl+c`            | Quit or detach player     |
 | `/` or `s`                 | Focus search              |
-| `1` / `2` / `3`           | Switch tab (For You / Subscriptions / History) |
+| `1` / `2` / `3` / `4`     | Switch tab (For You / Saved / Subs / History) |
+| `S`                        | Save current search (in search view) |
+| `d`                        | Delete saved search (in Saved tab) |
+| `r`                        | Rename saved search (in Saved tab) |
 | `h` `j` `k` `l` / arrows  | Navigate                  |
 | `Enter`                    | Select                    |
 | `Esc`                      | Back                      |
@@ -94,6 +97,23 @@ authenticated subscription feed.
 | `:q`                       | Quit or detach player     |
 | `:stop-player`             | Stop detached player      |
 | `:import-cookies <path>`   | Import browser cookies    |
+
+## Saved Searches
+
+Bookmark searches you run frequently so you can re-execute them with one
+keystroke. Each saved search stores the query text **and** the active filters
+(sort order, date range, type, length).
+
+1. Search for something with `/`, optionally set filters with `f`.
+2. Press `S` to save -- a popup asks for a name.
+3. Switch to the **Saved Searches** tab (`2`) to see all your bookmarks.
+4. Press `Enter` on any saved search to run it instantly with the original
+   filters restored.
+5. Use `r` to rename or `d` to delete a saved search.
+
+The list shows which filters are active and when you last ran each search
+(e.g. "ran 2h ago"), so you can tell at a glance which topics you haven't
+checked recently.
 
 ## Playback Tuning
 
