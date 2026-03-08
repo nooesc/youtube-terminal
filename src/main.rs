@@ -759,7 +759,10 @@ fn apply_pending_restore(state: &mut AppState) {
 
     let restored = match &restore.view {
         View::Home if matches!(state.view, View::Home) => {
-            if state.tabs.active == Tab::Subscriptions {
+            if state.tabs.active == Tab::SavedSearches {
+                let max = state.saved_searches.items.len().saturating_sub(1);
+                state.saved_searches.selected = restore.saved_search_selected.min(max);
+            } else if state.tabs.active == Tab::Subscriptions {
                 let max = state.subscription_channels.len().saturating_sub(1);
                 state.cards.selected_row = restore.cards_selected_row.min(max);
                 state.cards.selected_col = 0;

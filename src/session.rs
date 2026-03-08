@@ -17,7 +17,10 @@ pub struct PersistedSessionState {
     pub channel_selected_video: Option<usize>,
     pub playlist_selected_action: Option<usize>,
     pub playback_quality: PlaybackQuality,
+    pub window_geometry: Option<String>,
     pub detached_player: Option<DetachedPlayerState>,
+    #[serde(default)]
+    pub saved_search_selected: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,7 @@ pub struct PendingSessionRestore {
     pub channel_selected_action: Option<usize>,
     pub channel_selected_video: Option<usize>,
     pub playlist_selected_action: Option<usize>,
+    pub saved_search_selected: usize,
 }
 
 impl PersistedSessionState {
@@ -77,7 +81,9 @@ impl PersistedSessionState {
                 .as_ref()
                 .map(|detail| detail.selected_action),
             playback_quality: state.playback_quality,
+            window_geometry: state.last_mpv_geometry.clone(),
             detached_player,
+            saved_search_selected: state.saved_searches.selected,
         }
     }
 
@@ -91,6 +97,7 @@ impl PersistedSessionState {
             channel_selected_action: self.channel_selected_action,
             channel_selected_video: self.channel_selected_video,
             playlist_selected_action: self.playlist_selected_action,
+            saved_search_selected: self.saved_search_selected,
         }
     }
 }
@@ -133,6 +140,7 @@ mod tests {
         state.view = View::Search;
         state.search.query = "rust".into();
         state.playback_quality = PlaybackQuality::P720;
+        state.last_mpv_geometry = Some("100%x50%+10+20".into());
         state.current_playback = Some(PlaybackSession {
             url: "https://www.youtube.com/watch?v=abc".into(),
             mode: PlayMode::Video,
@@ -147,6 +155,7 @@ mod tests {
         assert_eq!(restored.view, View::Search);
         assert_eq!(restored.search_query, "rust");
         assert_eq!(restored.playback_quality, PlaybackQuality::P720);
+        assert_eq!(restored.window_geometry.as_deref(), Some("100%x50%+10+20"));
         assert!(restored.detached_player.is_some());
     }
 }
