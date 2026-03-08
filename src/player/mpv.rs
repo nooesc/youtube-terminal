@@ -38,6 +38,7 @@ fn build_launch_args(
     mode: PlayMode,
     quality: PlaybackQuality,
     config: &Config,
+    geometry_override: Option<&str>,
     log_path: &Path,
     cookie_path: Option<&Path>,
 ) -> Vec<String> {
@@ -65,9 +66,30 @@ fn build_launch_args(
 
     match mode {
         PlayMode::Video => {
-            args.push(format!("--geometry={}", config.mpv_geometry));
+            let geometry = geometry_override.unwrap_or(&config.mpv_geometry);
+            args.push(format!("--geometry={geometry}"));
             if config.mpv_ontop {
                 args.push("--ontop".to_string());
+            }
+
+            // macOS native appearance
+            if cfg!(target_os = "macos") {
+                args.extend([
+                    "--macos-title-bar-appearance=darkAqua".to_string(),
+                    "--macos-title-bar-material=dark".to_string(),
+                    "--corner-rounding=0.5".to_string(),
+                    "--background=color".to_string(),
+                    "--background-color=#000000".to_string(),
+                    "--osd-font=SF Pro".to_string(),
+                    "--osd-font-size=32".to_string(),
+                    "--osd-color=#FFFFFFFF".to_string(),
+                    "--osd-outline-size=1".to_string(),
+                    "--osd-outline-color=#00000080".to_string(),
+                    "--osd-shadow-offset=0".to_string(),
+                    "--osd-bar-h=2".to_string(),
+                    "--osd-bar-w=90".to_string(),
+                    "--osd-bar-align-y=0.95".to_string(),
+                ]);
             }
         }
         PlayMode::AudioOnly => {
@@ -184,6 +206,7 @@ impl MpvPlayer {
         mode: PlayMode,
         quality: PlaybackQuality,
         config: &Config,
+        geometry_override: Option<&str>,
         cookie_path: Option<&Path>,
     ) -> Result<()> {
         // Kill existing process if any
@@ -202,6 +225,7 @@ impl MpvPlayer {
             mode,
             quality,
             config,
+            geometry_override,
             &log_path,
             cookie_path,
         ));
@@ -280,6 +304,13 @@ impl MpvPlayer {
     pub fn seek_to(&mut self, seconds: f64) -> Result<()> {
         self.send_command(&[json!("seek"), json!(seconds), json!("absolute+exact")])?;
         Ok(())
+    }
+
+    pub fn window_geometry(&mut self) -> Result<String> {
+        self.get_property("geometry")?
+            .as_str()
+            .map(str::to_string)
+            .context("mpv geometry property unavailable")
     }
 
     pub fn set_volume(&mut self, vol: f64) -> Result<()> {
@@ -431,6 +462,7 @@ mod tests {
             PlayMode::Video,
             PlaybackQuality::P1080,
             &config,
+            None,
             Path::new("/tmp/mpv.log"),
             None,
         );
@@ -469,6 +501,7 @@ mod tests {
             PlayMode::AudioOnly,
             PlaybackQuality::P720,
             &config,
+            None,
             Path::new("/tmp/mpv.log"),
             None,
         );
@@ -479,5 +512,22 @@ mod tests {
             .iter()
             .any(|arg| arg
                 == "--ytdl-format=bestvideo[vcodec!*=av01][height<=720]+bestaudio/best[height<=720]/best"));
+    }
+
+    #[test]
+    fn test_build_launch_args_uses_geometry_override_when_present() {
+        let config = Config::default();
+        let args = build_launch_args(
+            Path::new("/tmp/test.sock"),
+            "https://www.youtube.com/watch?v=abc123",
+            PlayMode::Video,
+            PlaybackQuality::P1080,
+            &config,
+            Some("50%x50%+10+20"),
+            Path::new("/tmp/mpv.log"),
+            None,
+        );
+
+        assert!(args.iter().any(|arg| arg == "--geometry=50%x50%+10+20"));
     }
 }

@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::ui::theme;
 use chrono::Utc;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -7,9 +8,8 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
     let detail_state = match &state.channel_detail {
         Some(detail) if detail.detail.item.id == channel_id => detail,
         _ => {
-            let loading = Paragraph::new("Loading channel details...")
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::ALL).title("Channel"));
+            let loading = Paragraph::new("  Loading channel details...")
+                .style(Style::default().fg(theme::WARNING));
             f.render_widget(loading, area);
             return;
         }
@@ -22,7 +22,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
         .constraints([
             Constraint::Length(5), // header
             Constraint::Length(3), // subscribe action
-            Constraint::Min(5),    // video list
+            Constraint::Min(5),   // video list
         ])
         .split(area);
 
@@ -38,15 +38,18 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut header_lines = vec![
-        Line::from(Span::styled(
-            &detail.item.name,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled("\u{2190} ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled(
+                &detail.item.name,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
             format!("{subs} subscribers \u{00b7} {videos_count} videos"),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme::CHANNEL),
         )),
     ];
     if !detail.description.is_empty() {
@@ -58,14 +61,14 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
         };
         header_lines.push(Line::from(Span::styled(
             format!("{desc_preview}{suffix}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::TEXT_DIM),
         )));
     }
 
     let header = Paragraph::new(header_lines).block(
         Block::default()
-            .borders(Borders::ALL)
-            .title("\u{2190} Back (ESC)"),
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::BORDER)),
     );
     f.render_widget(header, chunks[0]);
 
@@ -78,24 +81,22 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
     let sub_selected = detail_state.selected_action == 0;
     let sub_style = if sub_selected {
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme::ACCENT)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme::TEXT)
     };
     let marker = if sub_selected { "\u{25b8} " } else { "  " };
     let sub_paragraph = Paragraph::new(Line::from(vec![
-        Span::styled(marker, Style::default().fg(Color::Cyan)),
+        Span::styled(marker, Style::default().fg(theme::ACCENT)),
         Span::styled(sub_label, sub_style),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    ]));
     f.render_widget(sub_paragraph, chunks[1]);
 
     // Video list
     if detail.videos.is_empty() {
-        let empty = Paragraph::new("No videos found")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Videos"));
+        let empty = Paragraph::new("  No videos found")
+            .style(Style::default().fg(theme::TEXT_DIM));
         f.render_widget(empty, chunks[2]);
         return;
     }
@@ -110,17 +111,17 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
             let marker = if selected { "\u{25b8} " } else { "  " };
             let title_style = if selected {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme::TEXT)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme::TEXT)
             };
             let meta = format_video_meta(v.view_count, v.duration.as_ref(), v.published);
             let line = Line::from(vec![
-                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(marker, Style::default().fg(theme::ACCENT)),
                 Span::styled(&v.title, title_style),
                 Span::raw("  "),
-                Span::styled(meta, Style::default().fg(Color::DarkGray)),
+                Span::styled(meta, Style::default().fg(theme::TEXT_DIM)),
             ]);
             ListItem::new(line)
         })
@@ -132,8 +133,12 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, channel_id: &str) {
     }
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Videos"))
-        .highlight_style(Style::default().bg(Color::Rgb(98, 114, 98)));
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(theme::BORDER)),
+        )
+        .highlight_style(Style::default().bg(theme::SELECTED_BG));
 
     f.render_stateful_widget(list, chunks[2], &mut list_state);
 }

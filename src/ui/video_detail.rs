@@ -1,15 +1,21 @@
 use crate::app::AppState;
+use crate::models::{ItemType, ThumbnailKey};
+use crate::thumbnails::ThumbnailCache;
+use crate::ui::theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
-pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
+/// Size to load detail thumbnails at (columns x rows).
+pub const DETAIL_THUMB_W: u32 = 80;
+pub const DETAIL_THUMB_H: u32 = 30;
+
+pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
     let detail_state = match &state.detail {
         Some(d) => d,
         None => {
             if state.loading.detail_loading {
-                let loading = Paragraph::new("Loading video details...")
-                    .style(Style::default().fg(Color::Yellow))
-                    .block(Block::default().borders(Borders::ALL).title("Video Detail"));
+                let loading = Paragraph::new("  Loading video details...")
+                    .style(Style::default().fg(theme::WARNING));
                 f.render_widget(loading, area);
             }
             return;
@@ -18,63 +24,105 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
 
     let detail = &detail_state.detail;
 
-    // Split into: header, description, actions
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // header (title, channel, stats)
-            Constraint::Min(5),    // description
-            Constraint::Length(7), // action menu
+            Constraint::Length(5), // header
+            Constraint::Min(5),   // middle: thumbnail + description
+            Constraint::Length(7), // actions
         ])
         .split(area);
 
-    // Header
     render_header(f, detail, chunks[0]);
 
-    // Description
-    render_description(f, &detail.description, chunks[1]);
+    let middle = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40), // thumbnail
+            Constraint::Percentage(60), // description
+        ])
+        .split(chunks[1]);
 
-    // Action menu
+    render_detail_thumbnail(f, detail, middle[0], thumb_cache);
+    render_description(f, &detail.description, middle[1]);
     render_actions(f, detail_state.selected_action, chunks[2]);
 }
 
 fn render_header(f: &mut Frame, detail: &crate::models::VideoDetail, area: Rect) {
     let views = detail.item.view_count.map(format_count).unwrap_or_default();
-
     let likes = detail.like_count.map(format_count).unwrap_or_default();
 
     let stats = if !likes.is_empty() {
-        format!("{} views · {} likes", views, likes)
+        format!("{} views \u{00b7} {} likes", views, likes)
     } else {
         format!("{} views", views)
     };
 
     let text = vec![
-        Line::from(Span::styled(
-            &detail.item.title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled("\u{2190} ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled(
+                &detail.item.title,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
             &detail.item.channel,
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme::CHANNEL),
         )),
-        Line::from(Span::styled(stats, Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(stats, Style::default().fg(theme::TEXT_DIM))),
     ];
 
     let header = Paragraph::new(text).block(
         Block::default()
-            .borders(Borders::ALL)
-            .title("\u{2190} Back (ESC)"),
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::BORDER)),
     );
     f.render_widget(header, area);
 }
 
+fn render_detail_thumbnail(
+    f: &mut Frame,
+    detail: &crate::models::VideoDetail,
+    area: Rect,
+    thumb_cache: &ThumbnailCache,
+) {
+    if area.height < 2 || area.width < 4 {
+        return;
+    }
+
+    let key = ThumbnailKey {
+        item_type: ItemType::Video,
+        item_id: detail.item.id.clone(),
+    };
+
+    if let Some(img) = thumb_cache.get_detail(&key) {
+        ThumbnailCache::render_halfblock(img, area, f.buffer_mut());
+    } else if let Some(img) = thumb_cache.get(&key) {
+        ThumbnailCache::render_halfblock(img, area, f.buffer_mut());
+    } else {
+        let placeholder = Paragraph::new("No thumbnail")
+            .style(Style::default().fg(theme::TEXT_DIM))
+            .alignment(Alignment::Center);
+        let y_center = area.y + area.height / 2;
+        f.render_widget(
+            placeholder,
+            Rect::new(area.x, y_center, area.width, 1),
+        );
+    }
+}
+
 fn render_description(f: &mut Frame, description: &str, area: Rect) {
     let desc = Paragraph::new(description)
+        .style(Style::default().fg(theme::TEXT))
         .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("Description"));
+        .block(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(Style::default().fg(theme::BORDER)),
+        );
     f.render_widget(desc, area);
 }
 
@@ -88,13 +136,13 @@ fn render_actions(f: &mut Frame, selected: usize, area: Rect) {
             let marker = if i == selected { "\u{25b8} " } else { "  " };
             let style = if i == selected {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme::TEXT)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(marker, Style::default().fg(theme::ACCENT)),
                 Span::styled(*action, style),
             ]))
         })
@@ -103,7 +151,11 @@ fn render_actions(f: &mut Frame, selected: usize, area: Rect) {
     let mut list_state = ListState::default();
     list_state.select(Some(selected));
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme::BORDER)),
+    );
 
     f.render_stateful_widget(list, area, &mut list_state);
 }

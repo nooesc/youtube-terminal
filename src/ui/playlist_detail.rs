@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::ui::theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
@@ -6,9 +7,8 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
     let detail_state = match &state.playlist_detail {
         Some(detail) => detail,
         None => {
-            let loading = Paragraph::new("Loading playlist details...")
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::ALL).title("Playlist"));
+            let loading = Paragraph::new("  Loading playlist details...")
+                .style(Style::default().fg(theme::WARNING));
             f.render_widget(loading, area);
             return;
         }
@@ -30,18 +30,25 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
         .map(|n| n.to_string())
         .unwrap_or_else(|| "unknown".to_string());
     let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("\u{2190} ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled(
+                &detail.item.title,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
-            &detail.item.title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!("{} · {} videos", detail.item.channel, count),
-            Style::default().fg(Color::Cyan),
+            format!("{} \u{00b7} {} videos", detail.item.channel, count),
+            Style::default().fg(theme::CHANNEL),
         )),
     ])
-    .block(Block::default().borders(Borders::ALL).title("Playlist"));
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::BORDER)),
+    );
     f.render_widget(header, chunks[0]);
 
     let description = if detail.description.is_empty() {
@@ -50,8 +57,8 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
         detail.description.as_str()
     };
     let body = Paragraph::new(description)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("Description"));
+        .style(Style::default().fg(theme::TEXT))
+        .wrap(Wrap { trim: true });
     f.render_widget(body, chunks[1]);
 
     let actions = [
@@ -68,15 +75,26 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect) {
             } else {
                 "  "
             };
+            let style = if i == detail_state.selected_action {
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT)
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(Color::Cyan)),
-                Span::styled(*action, Style::default().fg(Color::White)),
+                Span::styled(marker, Style::default().fg(theme::ACCENT)),
+                Span::styled(*action, style),
             ]))
         })
         .collect();
 
     let mut list_state = ListState::default();
     list_state.select(Some(detail_state.selected_action));
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme::BORDER)),
+    );
     f.render_stateful_widget(list, chunks[2], &mut list_state);
 }

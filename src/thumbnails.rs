@@ -41,12 +41,16 @@ pub async fn download_thumbnail(
 /// Cache of loaded and resized images ready for rendering.
 pub struct ThumbnailCache {
     cache: HashMap<ThumbnailKey, DynamicImage>,
+    detail_cache: HashMap<ThumbnailKey, DynamicImage>,
+    avatar_cache: HashMap<ThumbnailKey, DynamicImage>,
 }
 
 impl ThumbnailCache {
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),
+            detail_cache: HashMap::new(),
+            avatar_cache: HashMap::new(),
         }
     }
 
@@ -66,9 +70,37 @@ impl ThumbnailCache {
         Ok(())
     }
 
+    /// Load a thumbnail at a larger size for the detail view.
+    pub fn load_detail(&mut self, key: &ThumbnailKey, path: &Path, width: u32, height: u32) -> Result<()> {
+        let data = std::fs::read(path).context("failed to read thumbnail file")?;
+        let img = image::load_from_memory(&data).context("failed to decode thumbnail")?;
+        let resized = img.resize_exact(width, height * 2, image::imageops::FilterType::Triangle);
+        self.detail_cache.insert(key.clone(), resized);
+        Ok(())
+    }
+
     /// Get a cached thumbnail image.
     pub fn get(&self, key: &ThumbnailKey) -> Option<&DynamicImage> {
         self.cache.get(key)
+    }
+
+    /// Get a detail-sized cached thumbnail image.
+    pub fn get_detail(&self, key: &ThumbnailKey) -> Option<&DynamicImage> {
+        self.detail_cache.get(key)
+    }
+
+    /// Load a thumbnail as a channel avatar (square aspect).
+    pub fn load_avatar(&mut self, key: &ThumbnailKey, path: &Path, size: u32) -> Result<()> {
+        let data = std::fs::read(path).context("failed to read avatar file")?;
+        let img = image::load_from_memory(&data).context("failed to decode avatar")?;
+        let resized = img.resize_exact(size, size * 2, image::imageops::FilterType::Triangle);
+        self.avatar_cache.insert(key.clone(), resized);
+        Ok(())
+    }
+
+    /// Get a cached avatar image.
+    pub fn get_avatar(&self, key: &ThumbnailKey) -> Option<&DynamicImage> {
+        self.avatar_cache.get(key)
     }
 
     /// Render a thumbnail using half-block characters (U+2580 "UPPER HALF BLOCK")

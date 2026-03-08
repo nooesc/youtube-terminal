@@ -58,6 +58,14 @@ impl Database {
         Ok(items)
     }
 
+    pub fn update_subscriber_count(&self, channel_id: &str, count: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE subscriptions SET subscriber_count = ?1 WHERE channel_id = ?2",
+            params![count as i64, channel_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_subscribed_channel_ids(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT channel_id FROM subscriptions")?;
 

@@ -1,4 +1,5 @@
-use super::ContentProvider;
+use super::{ContentProvider, SearchOptions};
+use crate::app::{SearchDate, SearchItemType, SearchLength, SearchSort};
 use crate::models;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -8,6 +9,10 @@ use rustypipe::model::richtext::ToPlaintext;
 use rustypipe::model::{
     ChannelItem as RpChannelItem, PlaylistItem as RpPlaylistItem, Thumbnail,
     VideoItem as RpVideoItem, YouTubeItem,
+};
+use rustypipe::param::search_filter::{
+    ItemType as RpItemType, Length as RpLength, Order as RpOrder, SearchFilter,
+    UploadDate as RpUploadDate,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -161,6 +166,63 @@ impl ContentProvider for RustyPipeProvider {
                 continuation: result.items.ctoken,
             })
         }
+    }
+
+    async fn search_filtered(
+        &self,
+        query: &str,
+        options: &SearchOptions,
+    ) -> Result<models::FeedPage<models::FeedItem>> {
+        let mut filter = SearchFilter::new();
+
+        if let Some(sort) = options.sort {
+            filter = filter.sort(match sort {
+                SearchSort::Relevance => unreachable!(),
+                SearchSort::Date => RpOrder::Date,
+                SearchSort::Views => RpOrder::Views,
+                SearchSort::Rating => RpOrder::Rating,
+            });
+        }
+
+        if let Some(date) = options.date {
+            filter = filter.date(match date {
+                SearchDate::Any => unreachable!(),
+                SearchDate::Hour => RpUploadDate::Hour,
+                SearchDate::Day => RpUploadDate::Day,
+                SearchDate::Week => RpUploadDate::Week,
+                SearchDate::Month => RpUploadDate::Month,
+                SearchDate::Year => RpUploadDate::Year,
+            });
+        }
+
+        if let Some(item_type) = options.item_type {
+            filter = filter.item_type(match item_type {
+                SearchItemType::All => unreachable!(),
+                SearchItemType::Video => RpItemType::Video,
+                SearchItemType::Channel => RpItemType::Channel,
+                SearchItemType::Playlist => RpItemType::Playlist,
+            });
+        }
+
+        if let Some(length) = options.length {
+            filter = filter.length(match length {
+                SearchLength::Any => unreachable!(),
+                SearchLength::Short => RpLength::Short,
+                SearchLength::Medium => RpLength::Medium,
+                SearchLength::Long => RpLength::Long,
+            });
+        }
+
+        let result = self
+            .client
+            .query()
+            .search_filter::<YouTubeItem, _>(query, &filter)
+            .await
+            .context("search_filter failed")?;
+        Ok(models::FeedPage {
+            items: result.items.items.iter().map(map_youtube_item).collect(),
+            continuation: result.items.ctoken,
+        })
     }
 
     async fn video_detail(&self, id: &str) -> Result<models::VideoDetail> {

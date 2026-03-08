@@ -1,17 +1,60 @@
 use crate::app::AppState;
 use crate::models::FeedItem;
 use crate::thumbnails::ThumbnailCache;
+use crate::ui::theme;
 use chrono::Utc;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-pub const CARD_WIDTH: u16 = 50;
-pub const CARD_HEIGHT: u16 = 14;
-pub const THUMB_HEIGHT: u16 = 8;
+/// Minimum card width before we reduce column count
+const MIN_CARD_WIDTH: u16 = 28;
+/// Preferred card width used to determine initial column count
+const PREFERRED_CARD_WIDTH: u16 = 36;
+/// Minimum card height (borders + 4 text lines + 3 thumb rows)
+const MIN_CARD_HEIGHT: u16 = 10;
+
+/// Thumbnail load dimensions (generous, covers most card sizes)
+pub const THUMB_LOAD_WIDTH: u32 = 64;
+pub const THUMB_LOAD_HEIGHT: u32 = 14;
+
+/// Compute how many columns fit for a given terminal width.
+pub fn compute_columns(area_width: u16) -> usize {
+    let cols = (area_width / PREFERRED_CARD_WIDTH).max(1);
+    let card_w = area_width / cols;
+    if card_w < MIN_CARD_WIDTH && cols > 1 {
+        (area_width / MIN_CARD_WIDTH).max(1) as usize
+    } else {
+        cols as usize
+    }
+}
+
+/// Compute adaptive card dimensions for the given area.
+fn compute_grid(area: Rect) -> GridLayout {
+    let cols = compute_columns(area.width) as u16;
+    let card_w = area.width / cols;
+
+    // For height: try to fit as many rows as possible with reasonable card height
+    let visible_rows = (area.height / MIN_CARD_HEIGHT).max(1);
+    let card_h = area.height / visible_rows;
+
+    GridLayout {
+        cols: cols as usize,
+        card_w,
+        card_h,
+        visible_rows: visible_rows as usize,
+    }
+}
+
+struct GridLayout {
+    cols: usize,
+    card_w: u16,
+    card_h: u16,
+    visible_rows: usize,
+}
 
 pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &ThumbnailCache) {
     if state.loading.feed_loading && state.cards.items.is_empty() {
-        let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::Yellow));
+        let loading = Paragraph::new("Loading...").style(Style::default().fg(theme::WARNING));
         f.render_widget(
             loading,
             Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1),
@@ -25,7 +68,7 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thumbna
         } else {
             "No content yet. Press / to search."
         };
-        let empty = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new(msg).style(Style::default().fg(theme::TEXT_DIM));
         f.render_widget(
             empty,
             Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1),
@@ -33,48 +76,42 @@ pub fn render(f: &mut Frame, state: &AppState, area: Rect, thumb_cache: &Thumbna
         return;
     }
 
-    // Use full area — no outer border to maximize space
-    let inner = area;
-
-    // Calculate grid dimensions
-    let cols = ((inner.width + 1) / (CARD_WIDTH + 1)).max(1) as usize;
+    let grid = compute_grid(area);
     let total = state.cards.items.len();
-    let rows_count = total.div_ceil(cols);
+    let rows_count = total.div_ceil(grid.cols);
 
-    // Calculate visible rows based on available height
-    let visible_rows = (inner.height / CARD_HEIGHT) as usize;
-    if visible_rows == 0 {
+    if grid.visible_rows == 0 {
         return;
     }
 
     // Scroll offset -- keep selected row visible
-    let scroll_offset = if state.cards.selected_row >= visible_rows {
-        state.cards.selected_row - visible_rows + 1
+    let scroll_offset = if state.cards.selected_row >= grid.visible_rows {
+        state.cards.selected_row - grid.visible_rows + 1
     } else {
         0
     };
 
     // Render visible cards
-    for row_idx in 0..visible_rows.min(rows_count) {
+    for row_idx in 0..grid.visible_rows.min(rows_count) {
         let actual_row = row_idx + scroll_offset;
         if actual_row >= rows_count {
             break;
         }
 
-        for col in 0..cols {
-            let item_idx = actual_row * cols + col;
+        for col in 0..grid.cols {
+            let item_idx = actual_row * grid.cols + col;
             if item_idx >= total {
                 break;
             }
 
-            let x = inner.x + (col as u16) * (CARD_WIDTH + 1);
-            let y = inner.y + (row_idx as u16) * CARD_HEIGHT;
+            let x = area.x + (col as u16) * grid.card_w;
+            let y = area.y + (row_idx as u16) * grid.card_h;
 
-            if x + CARD_WIDTH > inner.x + inner.width || y + CARD_HEIGHT > inner.y + inner.height {
+            if x + grid.card_w > area.x + area.width || y + grid.card_h > area.y + area.height {
                 break;
             }
 
-            let card_area = Rect::new(x, y, CARD_WIDTH, CARD_HEIGHT);
+            let card_area = Rect::new(x, y, grid.card_w, grid.card_h);
             let is_selected =
                 actual_row == state.cards.selected_row && col == state.cards.selected_col;
 
@@ -96,15 +133,15 @@ fn render_card(
     selected: bool,
     thumb_cache: &ThumbnailCache,
 ) {
-    let selected_green_bg = Color::Rgb(98, 114, 98);
     let (border_style, bg) = if selected {
-        (Style::default().fg(Color::Green), selected_green_bg)
+        (Style::default().fg(theme::ACCENT), theme::SELECTED_BG)
     } else {
-        (Style::default().fg(Color::DarkGray), Color::Reset)
+        (Style::default().fg(theme::BORDER), Color::Reset)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(border_style)
         .style(Style::default().bg(bg));
     let inner = block.inner(area);
@@ -154,7 +191,7 @@ fn render_card(
                 Paragraph::new(Line::from(Span::styled(
                     tline.clone(),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme::TEXT)
                         .add_modifier(Modifier::BOLD),
                 ))),
                 Rect::new(inner.x, y, inner.width, 1),
@@ -168,7 +205,7 @@ fn render_card(
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 truncate_str(&channel, w),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::TEXT_DIM),
             ))),
             Rect::new(inner.x, y, inner.width, 1),
         );
@@ -180,7 +217,7 @@ fn render_card(
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 truncate_str(&meta, w),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::TEXT_DIM),
             ))),
             Rect::new(inner.x, y, inner.width, 1),
         );
@@ -325,7 +362,7 @@ mod tests {
         assert_eq!(truncate_str("ab", 2), "ab");
         assert_eq!(truncate_str("abcd", 3), "abc");
         // Unicode safety
-        assert_eq!(truncate_str("こんにちは世界", 6), "こんに...");
+        assert_eq!(truncate_str("\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{4e16}\u{754c}", 6), "\u{3053}\u{3093}\u{306b}...");
     }
 
     #[test]
