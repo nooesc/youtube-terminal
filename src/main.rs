@@ -10,12 +10,13 @@ mod session;
 mod thumbnails;
 mod ui;
 
-use app::{Action, AppState, Direction, LoadedPage, PlaybackLoadState, Tab, View};
+use app::{Action, AppState, Direction, LoadedPage, PlaybackLoadState, PopupState, Tab, View};
 use auth::AuthState;
 use config::Config;
 use db::Database;
 use event::{create_action_channel, poll_event, ActionSender};
-use models::{FeedItem, ItemType, VideoItem};
+use models::{FeedItem, ItemType, ThumbnailKey, VideoItem};
+use std::path::Path;
 use player::mpv::{poll_socket_state, MpvPlayer};
 use player::{PlayMode, PlaybackSession};
 use provider::rustypipe_provider::RustyPipeProvider;
@@ -72,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
     // 6. Init app state
     let mut state = AppState::new();
     state.playback_quality = config.default_playback_quality;
+    state.saved_searches.items = db.get_saved_searches().unwrap_or_default();
     let mut thumb_cache = ThumbnailCache::new();
 
     // 7. Create action channels
@@ -170,6 +172,18 @@ fn handle_action(
             state.dispatch(action);
             spawn_search_load(state, &query, provider, tx);
         }
+        Action::FilterCycleUp | Action::FilterCycleDown | Action::ResetFilters => {
+            state.dispatch(action);
+            // Auto-resubmit search with new filters
+            if !state.search.query.is_empty() {
+                let query = state.search.query.clone();
+                state.loading.search_request_id += 1;
+                state.loading.search_loading = true;
+                state.video_list.items.clear();
+                state.video_list.selected = 0;
+                spawn_search_load(state, &query, provider, tx);
+            }
+        }
         Action::SubmitCommand(ref cmd) => {
             let cmd = cmd.trim().to_string();
             state.dispatch(action);
@@ -184,7 +198,25 @@ fn handle_action(
                     }
                 }
                 View::Home => {
-                    if state.tabs.active == Tab::Subscriptions {
+                    if state.tabs.active == Tab::SavedSearches {
+                        if let Some(saved) = state.saved_searches.items.get(state.saved_searches.selected).cloned() {
+                            let _ = db.update_last_run(saved.id);
+                            state.search.query = saved.query.clone();
+                            state.search.cursor = saved.query.len();
+                            state.search.filter.sort = saved.sort;
+                            state.search.filter.date = saved.date;
+                            state.search.filter.item_type = saved.item_type;
+                            state.search.filter.length = saved.length;
+                            state.previous_views.push(state.view.clone());
+                            state.view = View::Search;
+                            state.loading.search_request_id += 1;
+                            state.loading.search_loading = true;
+                            state.video_list.items.clear();
+                            state.video_list.selected = 0;
+                            spawn_search_load(state, &saved.query, provider, tx);
+                            state.saved_searches.items = db.get_saved_searches().unwrap_or_default();
+                        }
+                    } else if state.tabs.active == Tab::Subscriptions {
                         // Select from subscription channel list
                         let channel_id = state
                             .subscription_channels
@@ -338,11 +370,17 @@ fn handle_action(
             }
             // Don't dispatch Select to state -- we handle it entirely here
         }
-        Action::SwitchTab(_) => {
+        Action::SwitchTab(ref tab) => {
+            let tab = *tab;
             state.dispatch(action);
-            spawn_feed_load(state, provider, tx, db);
+            if tab == Tab::SavedSearches {
+                state.saved_searches.items = db.get_saved_searches().unwrap_or_default();
+            } else {
+                spawn_feed_load(state, provider, tx, db);
+            }
         }
         Action::Quit => {
+            refresh_player_geometry(state, player);
             state.stop_player_on_exit = false;
             state.dispatch(action);
         }
@@ -443,11 +481,40 @@ fn handle_action(
             if let Ok(json) = serde_json::to_string(detail) {
                 let _ = db.set_cached_metadata(&detail.item.id, &json);
             }
+            // Load detail-sized thumbnail for the video detail page
+            let thumb_key = models::ThumbnailKey {
+                item_type: models::ItemType::Video,
+                item_id: detail.item.id.clone(),
+            };
+            if thumb_cache.get_detail(&thumb_key).is_none() {
+                if let Ok(Some(path)) = db.get_thumbnail_path(&thumb_key) {
+                    if path.exists() {
+                        let _ = thumb_cache.load_detail(
+                            &thumb_key,
+                            &path,
+                            ui::video_detail::DETAIL_THUMB_W,
+                            ui::video_detail::DETAIL_THUMB_H,
+                        );
+                    }
+                }
+            }
             state.dispatch(action);
             apply_pending_restore(state);
         }
         Action::ChannelDetailLoaded(_, ref detail) => {
             let is_subbed = db.is_subscribed(&detail.item.id).unwrap_or(false);
+            // Refresh subscriber count in DB if subscribed (search results may have wrong counts)
+            if is_subbed {
+                if let Some(count) = detail.item.subscriber_count {
+                    let _ = db.update_subscriber_count(&detail.item.id, count);
+                    // Also update the in-memory subscription list
+                    for ch in &mut state.subscription_channels {
+                        if ch.id == detail.item.id {
+                            ch.subscriber_count = Some(count);
+                        }
+                    }
+                }
+            }
             state.dispatch(action);
             if let Some(ref mut cd) = state.channel_detail {
                 cd.is_subscribed = is_subbed;
@@ -464,6 +531,11 @@ fn handle_action(
             let th = ui::card_grid::THUMB_HEIGHT as u32;
             if thumb_cache.load(key, path, tw, th).is_ok() {
                 let _ = db.set_thumbnail_path(key, path);
+                // Also load as avatar for subscription list
+                if key.item_type == ItemType::Channel {
+                    let avatar_size = ui::subscription_list::AVATAR_SIZE as u32;
+                    let _ = thumb_cache.load_avatar(key, path, avatar_size);
+                }
                 state.dispatch(action);
             } else {
                 let _ = std::fs::remove_file(path);
@@ -507,6 +579,10 @@ fn handle_action(
                 }
             }
         }
+        Action::RefreshSubscriberCount(ref channel_id, count) => {
+            let _ = db.update_subscriber_count(channel_id, count);
+            state.dispatch(action);
+        }
         Action::SubscribeSelected => {
             let channel = match &state.view {
                 View::Search => {
@@ -536,6 +612,70 @@ fn handle_action(
                 }
             } else {
                 state.command.message = Some("Select a channel to subscribe".into());
+            }
+        }
+        Action::PopupSubmit => {
+            let popup = state.popup.take();
+            match popup {
+                Some(PopupState::SaveSearch { ref input, .. }) => {
+                    if !input.is_empty() {
+                        let name = input.clone();
+                        let filter = &state.search.filter;
+                        match db.save_search(
+                            &name,
+                            &state.search.query,
+                            filter.sort,
+                            filter.date,
+                            filter.item_type,
+                            filter.length,
+                        ) {
+                            Ok(_) => {
+                                state.command.message =
+                                    Some(format!("Saved search \"{}\"", name));
+                                state.saved_searches.items =
+                                    db.get_saved_searches().unwrap_or_default();
+                            }
+                            Err(e) => {
+                                state.command.message =
+                                    Some(format!("Save error: {}", e));
+                            }
+                        }
+                    }
+                }
+                Some(PopupState::ConfirmDelete { id, ref name }) => {
+                    let name = name.clone();
+                    match db.delete_saved_search(id) {
+                        Ok(()) => {
+                            state.command.message = Some(format!("Deleted \"{}\"", name));
+                            state.saved_searches.items =
+                                db.get_saved_searches().unwrap_or_default();
+                            let max = state.saved_searches.items.len().saturating_sub(1);
+                            state.saved_searches.selected =
+                                state.saved_searches.selected.min(max);
+                        }
+                        Err(e) => {
+                            state.command.message = Some(format!("Delete error: {}", e));
+                        }
+                    }
+                }
+                Some(PopupState::Rename { id, ref input, .. }) => {
+                    if !input.is_empty() {
+                        let new_name = input.clone();
+                        match db.rename_saved_search(id, &new_name) {
+                            Ok(()) => {
+                                state.command.message =
+                                    Some(format!("Renamed to \"{}\"", new_name));
+                                state.saved_searches.items =
+                                    db.get_saved_searches().unwrap_or_default();
+                            }
+                            Err(e) => {
+                                state.command.message =
+                                    Some(format!("Rename error: {}", e));
+                            }
+                        }
+                    }
+                }
+                None => {}
             }
         }
         _ => {
@@ -570,6 +710,7 @@ fn restore_saved_session(
     state.search.cursor = state.search.query.len();
     state.search.focused = false;
     state.playback_quality = saved.playback_quality;
+    state.last_mpv_geometry = saved.window_geometry.clone();
     state.pending_restore = Some(saved.pending_restore());
 
     if let Some(detached) = saved.detached_player.clone() {
@@ -683,6 +824,7 @@ fn apply_pending_restore(state: &mut AppState) {
 }
 
 fn stop_playback(player: &mut MpvPlayer, state: &mut AppState) {
+    refresh_player_geometry(state, player);
     player.stop();
     state.playback_loading = None;
     state.current_playback = None;
@@ -699,8 +841,14 @@ fn spawn_search_load(
     let provider = Arc::clone(provider);
     let req_id = state.loading.search_request_id;
     let query = query.to_string();
+    let options = build_search_options(&state.search.filter);
     tokio::spawn(async move {
-        match provider.search(&query, None).await {
+        let result = if options.is_some() {
+            provider.search_filtered(&query, &options.unwrap()).await
+        } else {
+            provider.search(&query, None).await
+        };
+        match result {
             Ok(page) => {
                 let _ = tx.send(Action::SearchResults(req_id, page));
             }
@@ -709,6 +857,37 @@ fn spawn_search_load(
             }
         }
     });
+}
+
+fn build_search_options(
+    filter: &app::SearchFilterState,
+) -> Option<provider::SearchOptions> {
+    use app::{SearchDate, SearchItemType, SearchLength, SearchSort};
+    if !filter.has_filters() {
+        return None;
+    }
+    Some(provider::SearchOptions {
+        sort: if filter.sort != SearchSort::Relevance {
+            Some(filter.sort)
+        } else {
+            None
+        },
+        date: if filter.date != SearchDate::Any {
+            Some(filter.date)
+        } else {
+            None
+        },
+        item_type: if filter.item_type != SearchItemType::All {
+            Some(filter.item_type)
+        } else {
+            None
+        },
+        length: if filter.length != SearchLength::Any {
+            Some(filter.length)
+        } else {
+            None
+        },
+    })
 }
 
 fn start_playback(
@@ -721,11 +900,13 @@ fn start_playback(
     mode: PlayMode,
     label: String,
 ) -> anyhow::Result<()> {
+    refresh_player_geometry(state, player);
     player.play(
         url,
         mode,
         state.playback_quality,
         config,
+        state.last_mpv_geometry.as_deref(),
         auth_state.cookie_path(),
     )?;
     state.loading.playback_request_id += 1;
@@ -746,6 +927,14 @@ fn start_playback(
         let _ = tx.send(Action::PlaybackLoadSlow(request_id));
     });
     Ok(())
+}
+
+fn refresh_player_geometry(state: &mut AppState, player: &mut MpvPlayer) {
+    if let Ok(geometry) = player.window_geometry() {
+        if !geometry.trim().is_empty() {
+            state.last_mpv_geometry = Some(geometry);
+        }
+    }
 }
 
 fn reload_current_playback(
@@ -818,6 +1007,8 @@ fn spawn_feed_load(
     // Subscriptions tab: load from local SQLite DB
     if state.tabs.active == Tab::Subscriptions {
         let channels = db.get_subscriptions().unwrap_or_default();
+        // Spawn background subscriber count refresh for channels with suspicious counts
+        spawn_subscriber_count_refresh(&channels, provider, tx);
         let page = LoadedPage::Subscriptions(models::FeedPage {
             items: channels,
             continuation: None,
@@ -946,6 +1137,27 @@ fn spawn_detail_load_by_id(
     });
 }
 
+/// Refresh subscriber counts in the background for subscriptions.
+/// Fetches channel details and sends RefreshSubscriberCount actions.
+fn spawn_subscriber_count_refresh(
+    channels: &[models::ChannelItem],
+    provider: &Arc<RustyPipeProvider>,
+    tx: &ActionSender,
+) {
+    for channel in channels {
+        let tx = tx.clone();
+        let provider = Arc::clone(provider);
+        let channel_id = channel.id.clone();
+        tokio::spawn(async move {
+            if let Ok(detail) = provider.channel(&channel_id).await {
+                if let Some(count) = detail.item.subscriber_count {
+                    let _ = tx.send(Action::RefreshSubscriberCount(channel_id, count));
+                }
+            }
+        });
+    }
+}
+
 fn spawn_channel_load(
     state: &mut AppState,
     channel_id: &str,
@@ -1063,6 +1275,31 @@ fn spawn_thumbnail_downloads(
     thumb_cache: &ThumbnailCache,
     db: &Database,
 ) {
+    // Handle subscription channel avatars
+    if state.view == View::Home && state.tabs.active == Tab::Subscriptions {
+        let cache_dir = config.thumbnail_dir();
+        if let Some(channel) = state.subscription_channels.get(state.cards.selected_row) {
+            let key = ThumbnailKey {
+                item_type: ItemType::Channel,
+                item_id: channel.id.clone(),
+            };
+            if !state.loading.thumbnail_loading.contains(&key)
+                && thumb_cache.get_avatar(&key).is_none()
+                && !channel.thumbnail_url.is_empty()
+            {
+                download_thumbnail_if_needed(
+                    state,
+                    tx,
+                    &cache_dir,
+                    db,
+                    key,
+                    channel.thumbnail_url.clone(),
+                );
+            }
+        }
+        return;
+    }
+
     let item_indexes: Vec<usize> = match &state.view {
         View::Home => {
             let cols = state.cards.columns.max(1);
@@ -1096,44 +1333,55 @@ fn spawn_thumbnail_downloads(
             continue;
         }
 
-        if let Ok(Some(existing_path)) = db.get_thumbnail_path(&key) {
-            if existing_path.exists() {
-                let _ = tx.send(Action::ThumbnailReady(key.clone(), existing_path));
-                continue;
-            }
-        }
-
-        // Check if file already exists on disk
-        let filename = format!(
-            "{}_{}.jpg",
-            match key.item_type {
-                ItemType::Video => "video",
-                ItemType::Channel => "channel",
-                ItemType::Playlist => "playlist",
-            },
-            key.item_id
-        );
-        let cached_path = cache_dir.join(&filename);
-        if cached_path.exists() {
-            let _ = tx.send(Action::ThumbnailReady(key, cached_path));
-            continue;
-        }
-
-        state.loading.thumbnail_loading.insert(key.clone());
-        let tx = tx.clone();
-        let key_clone = key.clone();
-        let cache_dir = cache_dir.clone();
-        tokio::spawn(async move {
-            match thumbnails::download_thumbnail(&url, &key_clone, &cache_dir).await {
-                Ok(path) => {
-                    let _ = tx.send(Action::ThumbnailReady(key_clone, path));
-                }
-                Err(_) => {
-                    let _ = tx.send(Action::ThumbnailFailed(key_clone));
-                }
-            }
-        });
+        download_thumbnail_if_needed(state, tx, &cache_dir, db, key, url);
     }
+}
+
+fn download_thumbnail_if_needed(
+    state: &mut AppState,
+    tx: &ActionSender,
+    cache_dir: &Path,
+    db: &Database,
+    key: ThumbnailKey,
+    url: String,
+) {
+    if let Ok(Some(existing_path)) = db.get_thumbnail_path(&key) {
+        if existing_path.exists() {
+            let _ = tx.send(Action::ThumbnailReady(key, existing_path));
+            return;
+        }
+    }
+
+    // Check if file already exists on disk
+    let filename = format!(
+        "{}_{}.jpg",
+        match key.item_type {
+            ItemType::Video => "video",
+            ItemType::Channel => "channel",
+            ItemType::Playlist => "playlist",
+        },
+        key.item_id
+    );
+    let cached_path = cache_dir.join(&filename);
+    if cached_path.exists() {
+        let _ = tx.send(Action::ThumbnailReady(key, cached_path));
+        return;
+    }
+
+    state.loading.thumbnail_loading.insert(key.clone());
+    let tx = tx.clone();
+    let key_clone = key.clone();
+    let cache_dir = cache_dir.to_path_buf();
+    tokio::spawn(async move {
+        match thumbnails::download_thumbnail(&url, &key_clone, &cache_dir).await {
+            Ok(path) => {
+                let _ = tx.send(Action::ThumbnailReady(key_clone, path));
+            }
+            Err(_) => {
+                let _ = tx.send(Action::ThumbnailFailed(key_clone));
+            }
+        }
+    });
 }
 
 fn record_history(db: &Database, detail: &models::VideoDetail) {
@@ -1155,6 +1403,7 @@ fn execute_command(
     auth_state: &mut AuthState,
 ) {
     if cmd == "q" || cmd == "quit" {
+        refresh_player_geometry(state, player);
         state.stop_player_on_exit = false;
         state.should_quit = true;
         return;
