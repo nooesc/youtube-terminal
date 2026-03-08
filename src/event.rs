@@ -22,6 +22,11 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         return map_search_key(key);
     }
 
+    // If filter mode is active, handle filter navigation
+    if state.search.filter.active {
+        return map_filter_key(key);
+    }
+
     match key.code {
         // Quit
         KeyCode::Char('q') => Some(Action::Quit),
@@ -32,11 +37,13 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
 
         // Tab switching
         KeyCode::Char('1') => Some(Action::SwitchTab(Tab::ForYou)),
-        KeyCode::Char('2') => Some(Action::SwitchTab(Tab::Subscriptions)),
-        KeyCode::Char('3') => Some(Action::SwitchTab(Tab::History)),
+        KeyCode::Char('2') => Some(Action::SwitchTab(Tab::SavedSearches)),
+        KeyCode::Char('3') => Some(Action::SwitchTab(Tab::Subscriptions)),
+        KeyCode::Char('4') => Some(Action::SwitchTab(Tab::History)),
         KeyCode::Tab => {
             let next = match state.tabs.active {
-                Tab::ForYou => Tab::Subscriptions,
+                Tab::ForYou => Tab::SavedSearches,
+                Tab::SavedSearches => Tab::Subscriptions,
                 Tab::Subscriptions => Tab::History,
                 Tab::History => Tab::ForYou,
             };
@@ -45,7 +52,8 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         KeyCode::BackTab => {
             let prev = match state.tabs.active {
                 Tab::ForYou => Tab::History,
-                Tab::Subscriptions => Tab::ForYou,
+                Tab::SavedSearches => Tab::ForYou,
+                Tab::Subscriptions => Tab::SavedSearches,
                 Tab::History => Tab::Subscriptions,
             };
             Some(Action::SwitchTab(prev))
@@ -75,9 +83,27 @@ pub fn map_key_event(key: KeyEvent, state: &AppState) -> Option<Action> {
         // Subscribe/Unsubscribe toggle
         KeyCode::Char('S') => Some(Action::SubscribeSelected),
 
+        // Filter mode (only in search view)
+        KeyCode::Char('f') if state.view == crate::app::View::Search => {
+            Some(Action::EnterFilterMode)
+        }
+
         // Command mode
         KeyCode::Char(':') => Some(Action::EnterCommandMode),
 
+        _ => None,
+    }
+}
+
+fn map_filter_key(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Char('r') => Some(Action::ResetFilters),
+        KeyCode::Esc | KeyCode::Char('f') => Some(Action::ExitFilterMode),
+        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => Some(Action::FilterNextField),
+        KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => Some(Action::FilterPrevField),
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::FilterCycleUp),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::FilterCycleDown),
+        KeyCode::Enter => Some(Action::ExitFilterMode),
         _ => None,
     }
 }

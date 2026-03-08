@@ -18,6 +18,7 @@ pub enum View {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tab {
     ForYou,
+    SavedSearches,
     Subscriptions,
     History,
 }
@@ -82,6 +83,31 @@ pub enum Action {
     Unsubscribe(String), // channel_id
     SubscribeSelected,
 
+    // Saved searches
+    OpenSaveSearchPopup,
+    OpenRenameSearchPopup,
+    OpenDeleteSearchConfirm,
+    ExecuteSavedSearch(i64),
+
+    // Popup
+    PopupInput(char),
+    PopupBackspace,
+    PopupSubmit,
+    PopupCancel,
+
+    // Search filters
+    EnterFilterMode,
+    ExitFilterMode,
+    FilterNextField,
+    FilterPrevField,
+    FilterCycleUp,
+    FilterCycleDown,
+
+    ResetFilters,
+
+    // Background updates
+    RefreshSubscriberCount(String, u64), // channel_id, count
+
     // Errors
     ShowError(String),
 
@@ -104,12 +130,202 @@ pub struct SearchState {
     pub query: String,
     pub cursor: usize,
     pub focused: bool,
+    pub filter: SearchFilterState,
+}
+
+pub struct SearchFilterState {
+    pub active: bool,
+    pub focused_index: usize, // 0=Sort, 1=Date, 2=Type, 3=Length
+    pub sort: SearchSort,
+    pub date: SearchDate,
+    pub item_type: SearchItemType,
+    pub length: SearchLength,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSort {
+    Relevance,
+    Date,
+    Views,
+    Rating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDate {
+    Any,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchItemType {
+    All,
+    Video,
+    Channel,
+    Playlist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchLength {
+    Any,
+    Short,
+    Medium,
+    Long,
+}
+
+impl SearchSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Relevance => "Relevance",
+            Self::Date => "Date",
+            Self::Views => "Views",
+            Self::Rating => "Rating",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Relevance => Self::Date,
+            Self::Date => Self::Views,
+            Self::Views => Self::Rating,
+            Self::Rating => Self::Relevance,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Relevance => Self::Rating,
+            Self::Date => Self::Relevance,
+            Self::Views => Self::Date,
+            Self::Rating => Self::Views,
+        }
+    }
+}
+
+impl SearchDate {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Hour => "Hour",
+            Self::Day => "Day",
+            Self::Week => "Week",
+            Self::Month => "Month",
+            Self::Year => "Year",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Any => Self::Hour,
+            Self::Hour => Self::Day,
+            Self::Day => Self::Week,
+            Self::Week => Self::Month,
+            Self::Month => Self::Year,
+            Self::Year => Self::Any,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Any => Self::Year,
+            Self::Hour => Self::Any,
+            Self::Day => Self::Hour,
+            Self::Week => Self::Day,
+            Self::Month => Self::Week,
+            Self::Year => Self::Month,
+        }
+    }
+}
+
+impl SearchItemType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Video => "Video",
+            Self::Channel => "Channel",
+            Self::Playlist => "Playlist",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Video,
+            Self::Video => Self::Channel,
+            Self::Channel => Self::Playlist,
+            Self::Playlist => Self::All,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::All => Self::Playlist,
+            Self::Video => Self::All,
+            Self::Channel => Self::Video,
+            Self::Playlist => Self::Channel,
+        }
+    }
+}
+
+impl SearchLength {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Short => "Short",
+            Self::Medium => "Medium",
+            Self::Long => "Long",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Any => Self::Short,
+            Self::Short => Self::Medium,
+            Self::Medium => Self::Long,
+            Self::Long => Self::Any,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Any => Self::Long,
+            Self::Short => Self::Any,
+            Self::Medium => Self::Short,
+            Self::Long => Self::Medium,
+        }
+    }
+}
+
+impl SearchFilterState {
+    pub fn new() -> Self {
+        Self {
+            active: false,
+            focused_index: 0,
+            sort: SearchSort::Relevance,
+            date: SearchDate::Any,
+            item_type: SearchItemType::All,
+            length: SearchLength::Any,
+        }
+    }
+
+    pub fn has_filters(&self) -> bool {
+        self.sort != SearchSort::Relevance
+            || self.date != SearchDate::Any
+            || self.item_type != SearchItemType::All
+            || self.length != SearchLength::Any
+    }
 }
 
 pub struct CommandState {
     pub active: bool,
     pub input: String,
     pub message: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum PopupState {
+    SaveSearch { input: String, cursor: usize },
+    ConfirmDelete { id: i64, name: String },
+    Rename { id: i64, input: String, cursor: usize },
+}
+
+pub struct SavedSearchListState {
+    pub items: Vec<crate::db::saved_searches::SavedSearch>,
+    pub selected: usize,
 }
 
 pub struct CardGridState {
@@ -176,9 +392,12 @@ pub struct AppState {
     pub channel_detail: Option<ChannelDetailState>,
     pub playlist_detail: Option<PlaylistDetailState>,
     pub subscription_channels: Vec<ChannelItem>,
+    pub saved_searches: SavedSearchListState,
+    pub popup: Option<PopupState>,
     pub player_state: MpvPlayerState,
     pub playback_quality: PlaybackQuality,
     pub current_playback: Option<PlaybackSession>,
+    pub last_mpv_geometry: Option<String>,
     pub playback_loading: Option<PlaybackLoadState>,
     pub pending_restore: Option<PendingSessionRestore>,
     pub loading: LoadingState,
@@ -198,6 +417,7 @@ impl AppState {
                 query: String::new(),
                 cursor: 0,
                 focused: false,
+                filter: SearchFilterState::new(),
             },
             command: CommandState {
                 active: false,
@@ -220,9 +440,15 @@ impl AppState {
             channel_detail: None,
             playlist_detail: None,
             subscription_channels: Vec::new(),
+            saved_searches: SavedSearchListState {
+                items: Vec::new(),
+                selected: 0,
+            },
+            popup: None,
             player_state: MpvPlayerState::Stopped,
             playback_quality: PlaybackQuality::P1080,
             current_playback: None,
+            last_mpv_geometry: None,
             playback_loading: None,
             pending_restore: None,
             loading: LoadingState {
@@ -259,7 +485,9 @@ impl AppState {
             }
             Action::Navigate(dir) => match self.view {
                 View::Home => {
-                    if self.tabs.active == Tab::Subscriptions {
+                    if self.tabs.active == Tab::SavedSearches {
+                        self.navigate_saved_searches(dir);
+                    } else if self.tabs.active == Tab::Subscriptions {
                         self.navigate_subscription_list(dir);
                     } else {
                         self.navigate_cards(dir);
@@ -469,8 +697,140 @@ impl AppState {
                 }
                 self.player_state = state;
             }
+            Action::EnterFilterMode => {
+                self.search.filter.active = true;
+                self.search.filter.focused_index = 0;
+            }
+            Action::ExitFilterMode => {
+                self.search.filter.active = false;
+            }
+            Action::FilterNextField => {
+                if self.search.filter.focused_index < 3 {
+                    self.search.filter.focused_index += 1;
+                } else {
+                    self.search.filter.focused_index = 0;
+                }
+            }
+            Action::FilterPrevField => {
+                if self.search.filter.focused_index > 0 {
+                    self.search.filter.focused_index -= 1;
+                } else {
+                    self.search.filter.focused_index = 3;
+                }
+            }
+            Action::FilterCycleUp => {
+                match self.search.filter.focused_index {
+                    0 => self.search.filter.sort = self.search.filter.sort.prev(),
+                    1 => self.search.filter.date = self.search.filter.date.prev(),
+                    2 => self.search.filter.item_type = self.search.filter.item_type.prev(),
+                    3 => self.search.filter.length = self.search.filter.length.prev(),
+                    _ => {}
+                }
+                // Auto-resubmit handled by caller
+            }
+            Action::FilterCycleDown => {
+                match self.search.filter.focused_index {
+                    0 => self.search.filter.sort = self.search.filter.sort.next(),
+                    1 => self.search.filter.date = self.search.filter.date.next(),
+                    2 => self.search.filter.item_type = self.search.filter.item_type.next(),
+                    3 => self.search.filter.length = self.search.filter.length.next(),
+                    _ => {}
+                }
+                // Auto-resubmit handled by caller
+            }
+            Action::ResetFilters => {
+                self.search.filter = SearchFilterState::new();
+            }
             Action::Subscribe(_) | Action::Unsubscribe(_) | Action::SubscribeSelected => {
                 // Handled by the event loop in main.rs, not by dispatch
+            }
+            Action::OpenSaveSearchPopup => {
+                self.popup = Some(PopupState::SaveSearch {
+                    input: String::new(),
+                    cursor: 0,
+                });
+            }
+            Action::OpenRenameSearchPopup => {
+                if self.tabs.active == Tab::SavedSearches
+                    && !self.saved_searches.items.is_empty()
+                {
+                    let search = &self.saved_searches.items[self.saved_searches.selected];
+                    let name = search.name.clone();
+                    let id = search.id;
+                    self.popup = Some(PopupState::Rename {
+                        id,
+                        input: name.clone(),
+                        cursor: name.len(),
+                    });
+                }
+            }
+            Action::OpenDeleteSearchConfirm => {
+                if self.tabs.active == Tab::SavedSearches
+                    && !self.saved_searches.items.is_empty()
+                {
+                    let search = &self.saved_searches.items[self.saved_searches.selected];
+                    let id = search.id;
+                    let name = search.name.clone();
+                    self.popup = Some(PopupState::ConfirmDelete { id, name });
+                }
+            }
+            Action::ExecuteSavedSearch(_) => {
+                // Handled by caller in main.rs
+            }
+            Action::PopupInput(ch) => {
+                match self.popup {
+                    Some(PopupState::SaveSearch { ref mut input, ref mut cursor }) => {
+                        input.insert(*cursor, ch);
+                        *cursor += ch.len_utf8();
+                    }
+                    Some(PopupState::Rename { ref mut input, ref mut cursor, .. }) => {
+                        input.insert(*cursor, ch);
+                        *cursor += ch.len_utf8();
+                    }
+                    _ => {}
+                }
+            }
+            Action::PopupBackspace => {
+                match self.popup {
+                    Some(PopupState::SaveSearch { ref mut input, ref mut cursor }) => {
+                        if *cursor > 0 {
+                            let prev = input[..*cursor]
+                                .chars()
+                                .last()
+                                .map(|c| c.len_utf8())
+                                .unwrap_or(0);
+                            let start = *cursor - prev;
+                            input.drain(start..*cursor);
+                            *cursor = start;
+                        }
+                    }
+                    Some(PopupState::Rename { ref mut input, ref mut cursor, .. }) => {
+                        if *cursor > 0 {
+                            let prev = input[..*cursor]
+                                .chars()
+                                .last()
+                                .map(|c| c.len_utf8())
+                                .unwrap_or(0);
+                            let start = *cursor - prev;
+                            input.drain(start..*cursor);
+                            *cursor = start;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Action::PopupSubmit => {
+                // Handled by caller in main.rs
+            }
+            Action::PopupCancel => {
+                self.popup = None;
+            }
+            Action::RefreshSubscriberCount(channel_id, count) => {
+                for ch in &mut self.subscription_channels {
+                    if ch.id == channel_id {
+                        ch.subscriber_count = Some(count);
+                    }
+                }
             }
             Action::ShowError(msg) => {
                 self.command.message = Some(msg);
@@ -542,6 +902,24 @@ impl AppState {
             Direction::Down => {
                 if self.cards.selected_row < total - 1 {
                     self.cards.selected_row += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn navigate_saved_searches(&mut self, dir: Direction) {
+        let total = self.saved_searches.items.len();
+        if total == 0 {
+            return;
+        }
+        match dir {
+            Direction::Up => {
+                self.saved_searches.selected = self.saved_searches.selected.saturating_sub(1);
+            }
+            Direction::Down => {
+                if self.saved_searches.selected < total - 1 {
+                    self.saved_searches.selected += 1;
                 }
             }
             _ => {}
